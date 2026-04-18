@@ -1,6 +1,5 @@
 // Dane demonstracyjne — kilka miesięcy historii
 export async function seedDemoData(db) {
-  // Pobierz ID kategorii
   const expCats = {};
   const eCats = await db.getAllAsync('SELECT id, name FROM expenses_category');
   eCats.forEach(c => { expCats[c.name] = c.id; });
@@ -16,20 +15,21 @@ export async function seedDemoData(db) {
   // ─── WPŁYWY ───────────────────────────────────────────────
   const incomes = [
     // Styczeń
-    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-01-10', desc: 'Wypłata styczeń' },
-    { cat: 'Wynagrodzenie', amount: 4500, date: '2026-01-10', desc: 'Wypłata styczeń' },
+    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-01-10', desc: 'Wypłata styczeń — Jacek' },
+    { cat: 'Wynagrodzenie', amount: 4500, date: '2026-01-10', desc: 'Wypłata styczeń — Ola' },
     // Luty
-    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-02-10', desc: 'Wypłata luty' },
-    { cat: 'Wynagrodzenie', amount: 4500, date: '2026-02-10', desc: 'Wypłata luty' },
+    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-02-10', desc: 'Wypłata luty — Jacek' },
+    { cat: 'Wynagrodzenie', amount: 4500, date: '2026-02-10', desc: 'Wypłata luty — Ola' },
     { cat: 'Premia',        amount: 3000, date: '2026-02-15', desc: 'Premia kwartalna' },
     // Marzec
-    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-03-10', desc: 'Wypłata marzec' },
-    { cat: 'Wynagrodzenie', amount: 4500, date: '2026-03-10', desc: 'Wypłata marzec' },
+    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-03-10', desc: 'Wypłata marzec — Jacek' },
+    { cat: 'Wynagrodzenie', amount: 4500, date: '2026-03-10', desc: 'Wypłata marzec — Ola' },
     { cat: 'Sprzedaż',      amount: 800,  date: '2026-03-22', desc: 'Sprzedaż na OLX' },
     // Kwiecień
-    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-04-10', desc: 'Wypłata kwiecień' },
-    { cat: 'Wynagrodzenie', amount: 4700, date: '2026-04-10', desc: 'Wypłata kwiecień (podwyżka)' },
+    { cat: 'Wynagrodzenie', amount: 5800, date: '2026-04-10', desc: 'Wypłata kwiecień — Jacek' },
+    { cat: 'Wynagrodzenie', amount: 4700, date: '2026-04-10', desc: 'Wypłata kwiecień — Ola (podwyżka)' },
     { cat: 'Inwestycje & dywidendy', amount: 420, date: '2026-04-05', desc: 'Dywidenda XTB' },
+    { cat: 'Inwestycje & dywidendy', amount: 280, date: '2026-04-14', desc: 'Dywidenda Freedom24' },
   ];
 
   for (const i of incomes) {
@@ -81,15 +81,20 @@ export async function seedDemoData(db) {
     { cat: 'Prezenty',     amount: 200,  date: '2026-03-28', desc: 'Urodziny' },
     { cat: 'Inne',         amount: 130,  date: '2026-03-29', desc: 'Drobne' },
 
-    // Kwiecień (bieżący)
+    // Kwiecień
     { cat: 'Mieszkanie',   amount: 2400, date: '2026-04-05', desc: 'Czynsz + media kwiecień' },
     { cat: 'Żywność',      amount: 550,  date: '2026-04-04', desc: 'Zakupy Wielkanoc' },
     { cat: 'Żywność',      amount: 210,  date: '2026-04-07', desc: 'Lidl' },
+    { cat: 'Żywność',      amount: 180,  date: '2026-04-14', desc: 'Biedronka' },
     { cat: 'Transport',    amount: 280,  date: '2026-04-02', desc: 'Paliwo' },
+    { cat: 'Transport',    amount: 85,   date: '2026-04-10', desc: 'Parking + autobus' },
     { cat: 'Subskrypcje',  amount: 56,   date: '2026-04-01', desc: 'Netflix, Spotify' },
+    { cat: 'Subskrypcje',  amount: 35,   date: '2026-04-01', desc: 'ChatGPT Plus' },
     { cat: 'Sport',        amount: 150,  date: '2026-04-01', desc: 'Siłownia — abonament' },
     { cat: 'Rozrywka',     amount: 280,  date: '2026-04-06', desc: 'Wielkanocny wyjazd' },
     { cat: 'Zdrowie',      amount: 120,  date: '2026-04-03', desc: 'Apteka, suplementy' },
+    { cat: 'Elektronika',  amount: 499,  date: '2026-04-12', desc: 'Klawiatura mechaniczna' },
+    { cat: 'Prezenty',     amount: 160,  date: '2026-04-15', desc: 'Prezent urodzinowy' },
   ];
 
   for (const e of expenses) {
@@ -104,25 +109,26 @@ export async function seedDemoData(db) {
 
   const deposits = [
     // Styczeń
-    { acc: 'Konto mieszkaniowe Ola',     amount: 500,  date: '2026-01-12', desc: 'Comiesięczna wpłata' },
-    { acc: 'Konto mieszkaniowe Jacek',   amount: 500,  date: '2026-01-12', desc: 'Comiesięczna wpłata' },
-    { acc: 'XTB IKE Jacek',             amount: 700,  date: '2026-01-15', desc: 'IKE styczeń' },
-    { acc: 'Lokaty Ola & Jacek',         amount: 1000, date: '2026-01-20', desc: 'Nowa lokata' },
+    { acc: 'Konto mieszkaniowe Ola',   amount: 500,  date: '2026-01-12', desc: 'Comiesięczna wpłata' },
+    { acc: 'Konto mieszkaniowe Jacek', amount: 500,  date: '2026-01-12', desc: 'Comiesięczna wpłata' },
+    { acc: 'XTB IKE Jacek',           amount: 700,  date: '2026-01-15', desc: 'IKE styczeń' },
+    { acc: 'Lokaty Ola & Jacek',       amount: 1000, date: '2026-01-20', desc: 'Nowa lokata' },
     // Luty
-    { acc: 'Konto mieszkaniowe Ola',     amount: 500,  date: '2026-02-12', desc: 'Comiesięczna wpłata' },
-    { acc: 'Konto mieszkaniowe Jacek',   amount: 500,  date: '2026-02-12', desc: 'Comiesięczna wpłata' },
-    { acc: 'XTB IKE Jacek',             amount: 700,  date: '2026-02-15', desc: 'IKE luty' },
-    { acc: 'Freedom24 Jacek',           amount: 1500, date: '2026-02-18', desc: 'Zakup ETF' },
+    { acc: 'Konto mieszkaniowe Ola',   amount: 500,  date: '2026-02-12', desc: 'Comiesięczna wpłata' },
+    { acc: 'Konto mieszkaniowe Jacek', amount: 500,  date: '2026-02-12', desc: 'Comiesięczna wpłata' },
+    { acc: 'XTB IKE Jacek',           amount: 700,  date: '2026-02-15', desc: 'IKE luty' },
+    { acc: 'Freedom24 Jacek',         amount: 1500, date: '2026-02-18', desc: 'Zakup ETF' },
     // Marzec
-    { acc: 'Konto mieszkaniowe Ola',     amount: 500,  date: '2026-03-12', desc: 'Comiesięczna wpłata' },
-    { acc: 'Konto mieszkaniowe Jacek',   amount: 500,  date: '2026-03-12', desc: 'Comiesięczna wpłata' },
-    { acc: 'XTB IKE Jacek',             amount: 700,  date: '2026-03-15', desc: 'IKE marzec' },
-    { acc: 'Freedom24 Jacek',           amount: 1000, date: '2026-03-20', desc: 'Zakup ETF' },
-    { acc: 'Lokaty Ola & Jacek',         amount: 2000, date: '2026-03-25', desc: 'Premia na lokatę' },
+    { acc: 'Konto mieszkaniowe Ola',   amount: 500,  date: '2026-03-12', desc: 'Comiesięczna wpłata' },
+    { acc: 'Konto mieszkaniowe Jacek', amount: 500,  date: '2026-03-12', desc: 'Comiesięczna wpłata' },
+    { acc: 'XTB IKE Jacek',           amount: 700,  date: '2026-03-15', desc: 'IKE marzec' },
+    { acc: 'Freedom24 Jacek',         amount: 1000, date: '2026-03-20', desc: 'Zakup ETF' },
+    { acc: 'Lokaty Ola & Jacek',       amount: 2000, date: '2026-03-25', desc: 'Premia na lokatę' },
     // Kwiecień
-    { acc: 'Konto mieszkaniowe Ola',     amount: 500,  date: '2026-04-05', desc: 'Comiesięczna wpłata' },
-    { acc: 'Konto mieszkaniowe Jacek',   amount: 500,  date: '2026-04-05', desc: 'Comiesięczna wpłata' },
-    { acc: 'XTB IKE Jacek',             amount: 700,  date: '2026-04-06', desc: 'IKE kwiecień' },
+    { acc: 'Konto mieszkaniowe Ola',   amount: 500,  date: '2026-04-05', desc: 'Comiesięczna wpłata' },
+    { acc: 'Konto mieszkaniowe Jacek', amount: 500,  date: '2026-04-05', desc: 'Comiesięczna wpłata' },
+    { acc: 'XTB IKE Jacek',           amount: 700,  date: '2026-04-06', desc: 'IKE kwiecień' },
+    { acc: 'Freedom24 Jacek',         amount: 800,  date: '2026-04-10', desc: 'Zakup ETF kwiecień' },
   ];
 
   for (const d of deposits) {
@@ -167,6 +173,12 @@ export async function seedDemoData(db) {
     { acc: 'XTB IKE Jacek',           balance: 14050, date: '2026-03-31', note: 'Wzrost wyceny' },
     { acc: 'Freedom24 Jacek',         balance: 12820, date: '2026-03-31', note: 'Po zakupie ETF' },
     { acc: 'Lokaty Ola & Jacek',      balance: 16890, date: '2026-03-31', note: 'Premia + odsetki' },
+    // Kwiecień (w trakcie — połowa miesiąca)
+    { acc: 'Konto mieszkaniowe Ola',   balance: 10090, date: '2026-04-15', note: 'Połowa kwietnia' },
+    { acc: 'Konto mieszkaniowe Jacek', balance: 7790,  date: '2026-04-15', note: 'Połowa kwietnia' },
+    { acc: 'XTB IKE Jacek',           balance: 15210, date: '2026-04-15', note: 'Wzrost po korekcie' },
+    { acc: 'Freedom24 Jacek',         balance: 13950, date: '2026-04-15', note: 'Po zakupie + wzrost' },
+    { acc: 'Lokaty Ola & Jacek',      balance: 17120, date: '2026-04-15', note: 'Odsetki kwartalne' },
   ];
 
   for (const snap of snapshots) {

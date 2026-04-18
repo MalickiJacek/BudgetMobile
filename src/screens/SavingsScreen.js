@@ -1,12 +1,14 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, FlatList,
-  TouchableOpacity, Modal, TextInput, Alert
+  TouchableOpacity, Modal, TextInput, Alert, Dimensions
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { LineChart } from 'react-native-chart-kit';
 import { getDb, addDeposit, addWithdrawal } from '../db/database';
 
 const today = () => new Date().toISOString().split('T')[0];
+const W = Dimensions.get('window').width;
 
 const COLORS = ['#1565C0','#6A1B9A','#2E7D32','#E65100','#AD1457','#00838F','#F57F17','#37474F'];
 
@@ -14,9 +16,10 @@ export default function SavingsScreen({ navigation }) {
   const [tab, setTab] = useState('accounts');
   const [accounts, setAccounts] = useState([]);
   const [operations, setOperations] = useState([]);
+  const [trendData, setTrendData] = useState(null);
 
   const [opModal, setOpModal] = useState(false);
-  const [opType, setOpType] = useState('deposit'); // 'deposit' | 'withdrawal'
+  const [opType, setOpType] = useState('deposit');
   const [snapshotModal, setSnapshotModal] = useState(false);
   const [accountModal, setAccountModal] = useState(false);
 
@@ -48,7 +51,44 @@ export default function SavingsScreen({ navigation }) {
     setOperations(ops);
     setOpForm(f => ({ ...f, account_id: accs[0]?.id || null }));
     setSnapForm(f => ({ ...f, account_id: accs[0]?.id || null }));
+
+    // Wykres trendu — sumaryczne oszczędności w czasie
+    await loadTrend(db);
   }, []);
+
+  const loadTrend = async (db) => {
+    // Pobierz wszystkie snapshoty posortowane rosnąco
+    const snaps = await db.getAllAsync(`
+      SELECT account_id, balance, strftime('%Y-%m', snapshot_date) as month
+      FROM savings_snapshots
+      ORDER BY snapshot_date ASC, id ASC`);
+
+    if (snaps.length === 0) { setTrendData(null); return; }
+
+    // Zbierz wszystkie miesiące
+    const allMonths = [...new Set(snaps.map(s => s.month))].sort();
+
+    // Dla każdego konta — propaguj ostatni znany snapshot
+    const accountIds = [...new Set(snaps.map(s => s.account_id))];
+    const lastByAccount = {};
+
+    const monthlyTotals = allMonths.map(month => {
+      // Aktualizuj ostatni znany stan dla kont, które mają snapshot w tym miesiącu
+      snaps.filter(s => s.month === month).forEach(s => {
+        lastByAccount[s.account_id] = s.balance;
+      });
+      // Suma wszystkich kont (te bez snapshotu nie liczą się do sumy)
+      const total = Object.values(lastByAccount).reduce((s, v) => s + v, 0);
+      return { month, total: Math.round(total) };
+    });
+
+    // Etykiety — co ile miesięcy (max 7)
+    const step = Math.max(1, Math.floor(monthlyTotals.length / 6));
+    const labels = monthlyTotals.map((d, i) => i % step === 0 ? d.month.slice(5) : '');
+    const values = monthlyTotals.map(d => d.total);
+
+    setTrendData({ labels, values, months: monthlyTotals });
+  };
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -107,7 +147,6 @@ export default function SavingsScreen({ navigation }) {
     { text: 'Usuń', style: 'destructive', onPress: async () => {
       const db = await getDb();
       await db.runAsync('DELETE FROM savings_operations WHERE id=?', [item.id]);
-      // Jeśli wypłata — usuń też auto-wygenerowany wpływ
       if (item.type === 'withdrawal') {
         await db.runAsync('DELETE FROM incomes WHERE savings_operation_id=?', [item.id]);
       }
@@ -117,22 +156,28 @@ export default function SavingsScreen({ navigation }) {
 
   const totalSavings = accounts.reduce((s, a) => s + (a.last_balance || 0), 0);
 
+  const chartConfig = {
+    backgroundColor: '#fff', backgroundGradientFrom: '#fff', backgroundGradientTo: '#fff',
+    decimalPlaces: 0, color: (o = 1) => `rgba(21,101,192,${o})`,
+    labelColor: () => '#999',
+    propsForDots: { r: '5', strokeWidth: '2', stroke: '#fff' },
+    propsForLabels: { fontSize: 10 },
+  };
+
   return (
     <View style={s.container}>
       {/* Tabs */}
       <View style={s.tabs}>
-        {['accounts','operations'].map(t => (
+        {[['accounts','Konta'], ['operations','Historia'], ['trend','Wykres']].map(([t, label]) => (
           <TouchableOpacity key={t} style={[s.tab, tab === t && s.tabActive]} onPress={() => setTab(t)}>
-            <Text style={[s.tabText, tab === t && s.tabTextActive]}>
-              {t === 'accounts' ? 'Konta' : 'Historia'}
-            </Text>
+            <Text style={[s.tabText, tab === t && s.tabTextActive]}>{label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      {tab === 'accounts' ? (
+      {/* Tab: Konta */}
+      {tab === 'accounts' && (
         <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
-          {/* Suma */}
           <View style={s.totalCard}>
             <View>
               <Text style={s.totalLabel}>Łączne oszczędności</Text>
@@ -169,7 +214,10 @@ export default function SavingsScreen({ navigation }) {
             <Text style={s.addBtnText}>+ Nowe konto oszczędnościowe</Text>
           </TouchableOpacity>
         </ScrollView>
-      ) : (
+      )}
+
+      {/* Tab: Historia */}
+      {tab === 'operations' && (
         <FlatList
           data={operations}
           keyExtractor={i => String(i.id)}
@@ -196,6 +244,66 @@ export default function SavingsScreen({ navigation }) {
         />
       )}
 
+      {/* Tab: Wykres trendu */}
+      {tab === 'trend' && (
+        <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+          {trendData ? (
+            <>
+              <View style={s.trendHeader}>
+                <Text style={s.trendTitle}>Łączne oszczędności w czasie</Text>
+                <Text style={s.trendHint}>Suma ostatnich snapshotów wszystkich kont</Text>
+              </View>
+
+              <View style={s.chartCard}>
+                <LineChart
+                  data={{ labels: trendData.labels, datasets: [{ data: trendData.values, strokeWidth: 2.5 }] }}
+                  width={W - 32}
+                  height={240}
+                  chartConfig={chartConfig}
+                  bezier
+                  style={{ borderRadius: 12 }}
+                  withDots={trendData.values.length <= 12}
+                  withInnerLines
+                  withOuterLines={false}
+                  yAxisSuffix=" zł"
+                  formatYLabel={v => {
+                    const n = parseInt(v);
+                    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+                    return String(n);
+                  }}
+                />
+              </View>
+
+              {/* Tabela miesięcy */}
+              <View style={s.trendTable}>
+                <Text style={s.trendTableTitle}>Historia miesięczna</Text>
+                {[...trendData.months].reverse().map((d, i) => {
+                  const prev = trendData.months[trendData.months.length - 2 - i];
+                  const delta = prev ? d.total - prev.total : null;
+                  return (
+                    <View key={d.month} style={s.trendRow}>
+                      <Text style={s.trendRowMonth}>{d.month}</Text>
+                      <Text style={s.trendRowVal}>{d.total.toLocaleString('pl-PL')} zł</Text>
+                      {delta !== null && (
+                        <Text style={[s.trendRowDelta, { color: delta >= 0 ? '#2e7d32' : '#e53935' }]}>
+                          {delta >= 0 ? '+' : ''}{delta.toLocaleString('pl-PL')} zł
+                        </Text>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            </>
+          ) : (
+            <View style={s.emptyWrap}>
+              <Text style={s.emptyIcon}>📊</Text>
+              <Text style={s.emptyTitle}>Brak danych</Text>
+              <Text style={s.emptyHint}>Dodaj snapshoty stanu kont (📸), aby zobaczyć wykres wzrostu oszczędności.</Text>
+            </View>
+          )}
+        </ScrollView>
+      )}
+
       {/* FABs */}
       <View style={s.fabs}>
         <TouchableOpacity style={[s.fabSm, { backgroundColor: '#37474f' }]} onPress={() => setSnapshotModal(true)}>
@@ -220,7 +328,6 @@ export default function SavingsScreen({ navigation }) {
               <Text style={s.infoText}>Wypłata zostanie automatycznie zarejestrowana jako wpływ w budżecie.</Text>
             </View>
           )}
-
           <Text style={s.label}>Konto</Text>
           <View style={s.pills}>
             {accounts.map(a => (
@@ -228,22 +335,18 @@ export default function SavingsScreen({ navigation }) {
                 color={a.color} onPress={() => setOpForm(f => ({ ...f, account_id: a.id }))} />
             ))}
           </View>
-
           <Text style={s.label}>Kwota (zł)</Text>
           <TextInput style={s.input} value={opForm.amount}
             onChangeText={v => setOpForm(f => ({ ...f, amount: v }))}
             keyboardType="decimal-pad" placeholder="0" autoFocus />
-
           <Text style={s.label}>Data</Text>
           <TextInput style={s.input} value={opForm.date}
             onChangeText={v => setOpForm(f => ({ ...f, date: v }))}
             placeholder="YYYY-MM-DD" />
-
           <Text style={s.label}>Opis (opcjonalnie)</Text>
           <TextInput style={s.input} value={opForm.description}
             onChangeText={v => setOpForm(f => ({ ...f, description: v }))}
             placeholder="np. comiesięczna wpłata" />
-
           <View style={s.btnRow}>
             <TouchableOpacity style={s.btnCancel} onPress={() => setOpModal(false)}>
               <Text style={s.btnCancelText}>Anuluj</Text>
@@ -262,7 +365,6 @@ export default function SavingsScreen({ navigation }) {
           <View style={s.infoBox}>
             <Text style={s.infoText}>Wpisz aktualny stan wybranego konta. Zyski i straty zostaną uwzględnione automatycznie.</Text>
           </View>
-
           <Text style={s.label}>Konto</Text>
           <View style={s.pills}>
             {accounts.map(a => (
@@ -270,22 +372,18 @@ export default function SavingsScreen({ navigation }) {
                 color={a.color} onPress={() => setSnapForm(f => ({ ...f, account_id: a.id }))} />
             ))}
           </View>
-
           <Text style={s.label}>Aktualny stan (zł)</Text>
           <TextInput style={s.input} value={snapForm.balance}
             onChangeText={v => setSnapForm(f => ({ ...f, balance: v }))}
             keyboardType="decimal-pad" placeholder="np. 15420" autoFocus />
-
           <Text style={s.label}>Data</Text>
           <TextInput style={s.input} value={snapForm.snapshot_date}
             onChangeText={v => setSnapForm(f => ({ ...f, snapshot_date: v }))}
             placeholder="YYYY-MM-DD" />
-
           <Text style={s.label}>Notatka (opcjonalnie)</Text>
           <TextInput style={s.input} value={snapForm.note}
             onChangeText={v => setSnapForm(f => ({ ...f, note: v }))}
             placeholder="np. po wypłacie odsetek" />
-
           <View style={s.btnRow}>
             <TouchableOpacity style={s.btnCancel} onPress={() => setSnapshotModal(false)}>
               <Text style={s.btnCancelText}>Anuluj</Text>
@@ -301,12 +399,10 @@ export default function SavingsScreen({ navigation }) {
       <Modal visible={accountModal} animationType="slide" presentationStyle="pageSheet">
         <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
           <Text style={s.modalTitle}>Nowe konto</Text>
-
           <Text style={s.label}>Nazwa</Text>
           <TextInput style={s.input} value={accForm.name}
             onChangeText={v => setAccForm(f => ({ ...f, name: v }))}
             placeholder="np. IKE Plus, Lokata PKO..." autoFocus />
-
           <Text style={s.label}>Kolor</Text>
           <View style={s.colorRow}>
             {COLORS.map(c => (
@@ -314,7 +410,6 @@ export default function SavingsScreen({ navigation }) {
                 onPress={() => setAccForm(f => ({ ...f, color: c }))} />
             ))}
           </View>
-
           <View style={s.btnRow}>
             <TouchableOpacity style={s.btnCancel} onPress={() => setAccountModal(false)}>
               <Text style={s.btnCancelText}>Anuluj</Text>
@@ -340,8 +435,9 @@ const s = StyleSheet.create({
   tabs: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#efefef' },
   tab: { flex: 1, paddingVertical: 15, alignItems: 'center' },
   tabActive: { borderBottomWidth: 2.5, borderBottomColor: '#1565C0' },
-  tabText: { fontSize: 15, color: '#aaa', fontWeight: '600' },
+  tabText: { fontSize: 14, color: '#aaa', fontWeight: '600' },
   tabTextActive: { color: '#1565C0' },
+
   totalCard: { margin: 16, marginBottom: 10, backgroundColor: '#1a237e', borderRadius: 18, padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalLabel: { color: 'rgba(255,255,255,0.85)', fontSize: 14, fontWeight: '700' },
   totalHint: { color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 3 },
@@ -354,6 +450,7 @@ const s = StyleSheet.create({
   accountBal: { fontSize: 17, fontWeight: '800', color: '#1a237e', paddingRight: 16 },
   addBtn: { marginHorizontal: 14, marginTop: 10, padding: 16, borderRadius: 14, borderWidth: 1.5, borderColor: '#1565C0', borderStyle: 'dashed', alignItems: 'center' },
   addBtnText: { color: '#1565C0', fontSize: 15, fontWeight: '600' },
+
   empty: { color: '#bbb', textAlign: 'center', marginTop: 60, fontSize: 15 },
   opRow: { backgroundColor: '#fff', marginHorizontal: 14, marginVertical: 4, borderRadius: 12, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   opIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
@@ -364,11 +461,28 @@ const s = StyleSheet.create({
   opTag: { fontSize: 10, color: '#43a047', marginTop: 3, fontWeight: '600' },
   opAmount: { fontSize: 15, fontWeight: '800' },
   opDate: { fontSize: 11, color: '#bbb', marginTop: 2 },
+
+  trendHeader: { margin: 16, marginBottom: 8 },
+  trendTitle: { fontSize: 16, fontWeight: '700', color: '#333' },
+  trendHint: { fontSize: 12, color: '#aaa', marginTop: 4 },
+  chartCard: { marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, padding: 12, paddingTop: 16, marginBottom: 16 },
+  trendTable: { marginHorizontal: 16, backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 16 },
+  trendTableTitle: { fontSize: 13, fontWeight: '700', color: '#333', marginBottom: 12 },
+  trendRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  trendRowMonth: { width: 60, fontSize: 13, color: '#888' },
+  trendRowVal: { flex: 1, fontSize: 15, fontWeight: '700', color: '#1a237e' },
+  trendRowDelta: { fontSize: 13, fontWeight: '600' },
+  emptyWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 60, marginTop: 40 },
+  emptyIcon: { fontSize: 48, marginBottom: 16 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 8 },
+  emptyHint: { fontSize: 14, color: '#999', textAlign: 'center', lineHeight: 20 },
+
   fabs: { position: 'absolute', bottom: 24, right: 16, flexDirection: 'row', gap: 10, alignItems: 'center' },
   fab: { width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 6, elevation: 6 },
   fabText: { color: '#fff', fontSize: 26, fontWeight: '800' },
   fabSm: { width: 46, height: 46, borderRadius: 23, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
   fabSmText: { color: '#fff', fontSize: 22, fontWeight: '800' },
+
   modal: { flex: 1, padding: 20, backgroundColor: '#fff' },
   modalTitle: { fontSize: 22, fontWeight: '800', color: '#333', marginTop: 10, marginBottom: 16 },
   infoBox: { backgroundColor: '#f0f4ff', borderRadius: 10, padding: 12, marginBottom: 8 },

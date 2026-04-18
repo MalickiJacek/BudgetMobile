@@ -3,9 +3,9 @@ import {
   View, Text, StyleSheet, ScrollView, RefreshControl, Dimensions, TouchableOpacity, Alert
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { BarChart, PieChart } from 'react-native-chart-kit';
+import { PieChart } from 'react-native-chart-kit';
 import { getDb } from '../db/database';
-import { seedDemoData, clearAllData } from '../db/seed';
+import { useDemo } from '../context/DemoContext';
 
 const W = Dimensions.get('window').width;
 const CAT_COLORS = ['#e53935','#1e88e5','#43a047','#fb8c00','#8e24aa','#00897b','#f4511e','#3949ab','#00acc1','#7cb342','#fdd835','#6d4c41'];
@@ -13,6 +13,7 @@ const CAT_COLORS = ['#e53935','#1e88e5','#43a047','#fb8c00','#8e24aa','#00897b',
 export default function DashboardScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const { isDemoMode, enterDemo, exitDemo } = useDemo();
 
   const load = useCallback(async () => {
     const db = await getDb();
@@ -85,17 +86,8 @@ export default function DashboardScreen({ navigation }) {
   const chartConfig = {
     backgroundColor: '#fff', backgroundGradientFrom: '#fff', backgroundGradientTo: '#fff',
     decimalPlaces: 0, color: (o = 1) => `rgba(26,35,126,${o})`,
-    labelColor: () => '#888', barPercentage: 0.55,
+    labelColor: () => '#888',
     propsForLabels: { fontSize: 10 },
-  };
-
-  const barData = {
-    labels: history.map(h => h.label),
-    datasets: [
-      { data: history.map(h => Math.round(h.income)), color: (o = 1) => `rgba(67,160,71,${o})` },
-      { data: history.map(h => Math.round(h.expense + h.savings)), color: (o = 1) => `rgba(229,57,53,${o})` },
-    ],
-    legend: ['Wpływy', 'Wydatki+Oszcz.'],
   };
 
   const pieData = cats.filter(c => c.total > 0).slice(0, 8).map((c, i) => ({
@@ -162,12 +154,12 @@ export default function DashboardScreen({ navigation }) {
       {hasData && (
         <View style={s.section}>
           <Text style={s.sectionTitle}>📈 Ostatnie 6 miesięcy</Text>
-          <Text style={s.sectionHint}>Wpływy (zielony) vs Wydatki+Oszczędności (czerwony)</Text>
-          <BarChart
-            data={barData} width={W - 32} height={210}
-            chartConfig={chartConfig} style={s.chart}
-            withInnerLines fromZero showBarTops={false}
-          />
+          <View style={s.barLegend}>
+            <View style={s.barLegendItem}><View style={[s.barLegendDot, { backgroundColor: '#43a047' }]} /><Text style={s.barLegendText}>Wpływy</Text></View>
+            <View style={s.barLegendItem}><View style={[s.barLegendDot, { backgroundColor: '#e53935' }]} /><Text style={s.barLegendText}>Wydatki</Text></View>
+            <View style={s.barLegendItem}><View style={[s.barLegendDot, { backgroundColor: '#1565c0' }]} /><Text style={s.barLegendText}>Oszczędności</Text></View>
+          </View>
+          <BarGroup history={history} />
         </View>
       )}
 
@@ -195,31 +187,31 @@ export default function DashboardScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
-      {/* DEV — usunąć po testach */}
+      {/* Przełącznik trybu demo */}
       <View style={s.devRow}>
-        <TouchableOpacity style={s.devBtn} onPress={async () => {
-          Alert.alert('Demo dane', 'Wczytać przykładowe dane?', [
-            { text: 'Anuluj' },
-            { text: 'Wczytaj', onPress: async () => {
-              const db = await getDb();
-              await seedDemoData(db);
-              load();
-            }}
-          ]);
-        }}>
-          <Text style={s.devBtnText}>🧪 Wczytaj demo dane</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[s.devBtn, { borderColor: '#e53935' }]} onPress={async () => {
-          Alert.alert('Wyczyść', 'Usunąć wszystkie dane?', [
-            { text: 'Anuluj' },
-            { text: 'Usuń', style: 'destructive', onPress: async () => {
-              const db = await getDb();
-              await clearAllData(db);
-              load();
-            }}
-          ]);
-        }}>
-          <Text style={[s.devBtnText, { color: '#e53935' }]}>🗑️ Wyczyść dane</Text>
+        {isDemoMode && (
+          <View style={s.demoBadge}>
+            <Text style={s.demoBadgeText}>TRYB DEMO</Text>
+          </View>
+        )}
+        <TouchableOpacity
+          style={[s.devBtn, isDemoMode && { borderColor: '#1565c0' }]}
+          onPress={() => {
+            if (isDemoMode) {
+              Alert.alert('Powrót do danych', 'Wrócić do prawdziwych danych?', [
+                { text: 'Anuluj' },
+                { text: 'Powróć', onPress: exitDemo },
+              ]);
+            } else {
+              Alert.alert('Tryb demo', 'Przełączyć na przykładowe dane?', [
+                { text: 'Anuluj' },
+                { text: 'Wczytaj', onPress: enterDemo },
+              ]);
+            }
+          }}>
+          <Text style={[s.devBtnText, isDemoMode && { color: '#1565c0' }]}>
+            {isDemoMode ? '🔵 Powróć do prawdziwych danych' : '🧪 Wczytaj demo dane'}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -236,6 +228,32 @@ const MetricCard = ({ label, value, bg, color }) => (
     <Text style={{ fontSize: 14, fontWeight: '800', color }}>{value}</Text>
   </View>
 );
+
+const BarGroup = ({ history }) => {
+  const maxVal = Math.max(...history.map(h => Math.max(h.income, h.expense + h.savings)), 1);
+  const BAR_H = 140;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 12 }}>
+      {history.map((h, i) => {
+        const incH = Math.max(2, (h.income / maxVal) * BAR_H);
+        const expH = Math.max(2, (h.expense / maxVal) * BAR_H);
+        const savH = Math.max(2, (h.savings / maxVal) * BAR_H);
+        return (
+          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: BAR_H, gap: 2 }}>
+              <View style={{ flex: 1, height: incH, backgroundColor: '#43a047', borderRadius: 3 }} />
+              <View style={{ flex: 1, height: expH + savH, borderRadius: 3, overflow: 'hidden', justifyContent: 'flex-end' }}>
+                <View style={{ height: savH, backgroundColor: '#1565c0' }} />
+                <View style={{ height: expH, backgroundColor: '#e53935' }} />
+              </View>
+            </View>
+            <Text style={{ fontSize: 9, color: '#aaa', marginTop: 5 }}>{h.label}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+};
 
 const YearStat = ({ label, value, color }) => (
   <View style={{ alignItems: 'center', flex: 1 }}>
@@ -273,7 +291,13 @@ const s = StyleSheet.create({
   catBarWrap: { flex: 1, height: 6, backgroundColor: '#f0f0f0', borderRadius: 3, marginHorizontal: 8 },
   catBar: { height: 6, borderRadius: 3 },
   catVal: { width: 60, fontSize: 12, fontWeight: '600', color: '#333', textAlign: 'right' },
-  devRow: { flexDirection: 'row', gap: 10, marginTop: 8, marginBottom: 8 },
-  devBtn: { flex: 1, padding: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#aaa', alignItems: 'center' },
+  barLegend: { flexDirection: 'row', gap: 16, marginTop: 2, marginBottom: 4 },
+  barLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  barLegendDot: { width: 8, height: 8, borderRadius: 2 },
+  barLegendText: { fontSize: 11, color: '#888' },
+  devRow: { gap: 8, marginTop: 8, marginBottom: 8 },
+  devBtn: { padding: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#aaa', alignItems: 'center' },
   devBtnText: { fontSize: 13, color: '#555', fontWeight: '600' },
+  demoBadge: { backgroundColor: '#1565c0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, alignSelf: 'center', marginBottom: 4 },
+  demoBadgeText: { color: '#fff', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
 });

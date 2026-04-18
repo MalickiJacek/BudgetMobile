@@ -1,28 +1,41 @@
 import * as SQLite from 'expo-sqlite';
+import { importFromAppBudget } from './migrate';
 
-let db;
+let isDemoMode = false;
+let db = null;
+
+export function setDemoMode(demo) {
+  if (isDemoMode !== demo) {
+    isDemoMode = demo;
+    db = null;
+  }
+}
 
 export async function getDb() {
   if (!db) {
-    db = await SQLite.openDatabaseAsync('budget2.db');
+    db = await SQLite.openDatabaseAsync(isDemoMode ? 'budget_demo.db' : 'budget2.db');
+    await setupTables(db);
   }
   return db;
 }
 
-export async function initDb() {
-  const db = await getDb();
+async function setupTables(database) {
+  await database.execAsync(`PRAGMA journal_mode = WAL;`);
 
-  await db.execAsync(`PRAGMA journal_mode = WAL;`);
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS app_metadata (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
 
-  await db.execAsync(`
     CREATE TABLE IF NOT EXISTS expenses_category (
       id   INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE
     );
 
     CREATE TABLE IF NOT EXISTS incomes_category (
-      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-      name                 TEXT NOT NULL UNIQUE,
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      name                  TEXT NOT NULL UNIQUE,
       is_savings_withdrawal INTEGER NOT NULL DEFAULT 0
     );
 
@@ -52,13 +65,13 @@ export async function initDb() {
     );
 
     CREATE TABLE IF NOT EXISTS savings_operations (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      account_id INTEGER NOT NULL REFERENCES savings_accounts(id),
-      type       TEXT NOT NULL CHECK(type IN ('deposit','withdrawal')),
-      amount     REAL NOT NULL,
-      date       TEXT NOT NULL,
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id  INTEGER NOT NULL REFERENCES savings_accounts(id),
+      type        TEXT NOT NULL CHECK(type IN ('deposit','withdrawal')),
+      amount      REAL NOT NULL,
+      date        TEXT NOT NULL,
       description TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at  TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS savings_snapshots (
@@ -71,9 +84,9 @@ export async function initDb() {
     );
   `);
 
-  const { cnt } = await db.getFirstAsync('SELECT COUNT(*) as cnt FROM expenses_category');
+  const { cnt } = await database.getFirstAsync('SELECT COUNT(*) as cnt FROM expenses_category');
   if (cnt === 0) {
-    await db.execAsync(`
+    await database.execAsync(`
       INSERT INTO expenses_category (name) VALUES
         ('Mieszkanie'),('Żywność'),('Transport'),('Zdrowie'),
         ('Rozrywka'),('Odzież'),('Elektronika'),('Subskrypcje'),
@@ -86,18 +99,40 @@ export async function initDb() {
         ('Sprzedaż', 0),
         ('Inne', 0),
         ('Wypłata z oszczędności', 1);
-
-      INSERT INTO savings_accounts (name, color) VALUES
-        ('Konto mieszkaniowe Ola', '#1565C0'),
-        ('Konto mieszkaniowe Jacek', '#6A1B9A'),
-        ('XTB IKE Jacek', '#2E7D32'),
-        ('Freedom24 Jacek', '#E65100'),
-        ('Lokaty Ola & Jacek', '#AD1457');
     `);
   }
 }
 
-// Dodaje wpłatę na konto oszczędnościowe
+export async function initDb() {
+  const database = await getDb();
+
+  if (!isDemoMode) {
+    // Sprawdź czy migracja z AppBudget już się odbyła
+    const meta = await database.getFirstAsync(
+      "SELECT value FROM app_metadata WHERE key='real_data_imported'"
+    );
+
+    if (!meta) {
+      // Wyczyść wszystkie dane (w tym demo które się zmieszało)
+      await database.execAsync(`
+        DELETE FROM savings_snapshots;
+        DELETE FROM savings_operations;
+        DELETE FROM incomes;
+        DELETE FROM expenses;
+        DELETE FROM savings_accounts;
+      `);
+
+      // Importuj prawdziwe dane z AppBudget
+      await importFromAppBudget(database);
+
+      // Oznacz jako wykonane — nie uruchomi się ponownie
+      await database.runAsync(
+        "INSERT INTO app_metadata (key, value) VALUES ('real_data_imported', '1')"
+      );
+    }
+  }
+}
+
 export async function addDeposit(db, { account_id, amount, date, description }) {
   await db.runAsync(
     `INSERT INTO savings_operations (account_id, type, amount, date, description)
@@ -106,7 +141,6 @@ export async function addDeposit(db, { account_id, amount, date, description }) 
   );
 }
 
-// Dodaje wypłatę z konta oszczędnościowego + auto-wpis w Wpływach
 export async function addWithdrawal(db, { account_id, amount, date, description, accountName }) {
   const result = await db.runAsync(
     `INSERT INTO savings_operations (account_id, type, amount, date, description)

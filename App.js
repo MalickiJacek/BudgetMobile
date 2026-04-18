@@ -4,6 +4,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { initDb } from './src/db/database';
+import { DemoProvider, useDemo } from './src/context/DemoContext';
 
 import DashboardScreen from './src/screens/DashboardScreen';
 import ExpensesScreen from './src/screens/ExpensesScreen';
@@ -47,19 +48,10 @@ function SavingsNavigator() {
   );
 }
 
-export default function App() {
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    initDb().then(() => setReady(true)).catch(e => setError(e.message));
-  }, []);
-
-  if (error) return <View style={s.center}><Text style={s.error}>Błąd:{'\n'}{error}</Text></View>;
-  if (!ready) return <View style={s.center}><Text style={s.loading}>Ładowanie...</Text></View>;
-
+function AppNavigator() {
+  const { isDemoMode } = useDemo();
   return (
-    <NavigationContainer>
+    <NavigationContainer key={isDemoMode ? 'demo' : 'real'}>
       <Tab.Navigator screenOptions={{
         tabBarActiveTintColor: '#1a237e',
         tabBarInactiveTintColor: '#bdbdbd',
@@ -77,6 +69,24 @@ export default function App() {
           options={{ title: 'Oszczędności', tabBarIcon: () => <Text style={s.icon}>🏦</Text> }} />
       </Tab.Navigator>
     </NavigationContainer>
+  );
+}
+
+export default function App() {
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    initDb().then(() => setReady(true)).catch(e => setError(e.message));
+  }, []);
+
+  if (error) return <View style={s.center}><Text style={s.error}>Błąd:{'\n'}{error}</Text></View>;
+  if (!ready) return <View style={s.center}><Text style={s.loading}>Ładowanie...</Text></View>;
+
+  return (
+    <DemoProvider>
+      <AppNavigator />
+    </DemoProvider>
   );
 }
 
