@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import { setDemoMode, getDb } from '../db/database';
-import { seedDemoData, clearAllData } from '../db/seed';
+import { setDemoMode, countDemoExpenses, clearDemoData } from '../db/database';
+import { seedDemoData } from '../db/seed';
 
 const DemoContext = createContext();
 
@@ -9,10 +9,8 @@ export function DemoProvider({ children }) {
 
   const enterDemo = useCallback(async () => {
     setDemoMode(true);
-    // Upewnij się że demo DB ma dane
-    const db = await getDb();
-    const { cnt } = await db.getFirstAsync('SELECT COUNT(*) as cnt FROM expenses');
-    if (cnt === 0) await seedDemoData(db);
+    const cnt = await countDemoExpenses();
+    if (cnt === 0) await seedDemoData();
     setIsDemoMode(true);
   }, []);
 
@@ -23,8 +21,7 @@ export function DemoProvider({ children }) {
 
   const clearDemo = useCallback(async () => {
     if (!isDemoMode) return;
-    const db = await getDb();
-    await clearAllData(db);
+    await clearDemoData();
   }, [isDemoMode]);
 
   return (

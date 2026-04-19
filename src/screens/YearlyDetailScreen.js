@@ -1,73 +1,72 @@
-import React, { useState, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions
-} from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { PieChart } from 'react-native-chart-kit';
-import { getDb } from '../db/database';
+import { fetchIncomes, fetchExpenses, fetchSavingsOperations } from '../db/database';
 
 const W = Dimensions.get('window').width;
 const EXP_COLORS = ['#e53935','#1e88e5','#43a047','#fb8c00','#8e24aa','#00897b','#f4511e','#3949ab','#00acc1','#7cb342','#fdd835','#6d4c41'];
 const SAV_COLORS = ['#1565C0','#6A1B9A','#2E7D32','#E65100','#AD1457','#00838F','#F57F17','#37474F'];
 
-export default function YearlyDetailScreen({ route, navigation }) {
+export default function YearlyDetailScreen({ route }) {
   const { initialYear } = route.params;
   const [years, setYears] = useState([]);
   const [selected, setSelected] = useState(initialYear);
   const [data, setData] = useState(null);
-
-  const loadYears = useCallback(async () => {
-    const db = await getDb();
-    const raw = await db.getAllAsync(`
-      SELECT year FROM (
-        SELECT strftime('%Y', date) as year FROM incomes
-        UNION SELECT strftime('%Y', date) FROM expenses
-        UNION SELECT strftime('%Y', date) FROM savings_operations WHERE type='deposit'
-      ) GROUP BY year ORDER BY year DESC
-    `);
-    setYears(raw.map(r => r.year));
-  }, []);
-
-  const loadYear = useCallback(async (year) => {
-    const db = await getDb();
-    const [inc, exp, dep] = await Promise.all([
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM incomes WHERE strftime('%Y',date)=?`, [year]),
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM expenses WHERE strftime('%Y',date)=?`, [year]),
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM savings_operations WHERE type='deposit' AND strftime('%Y',date)=?`, [year]),
-    ]);
-
-    const expCats = await db.getAllAsync(`
-      SELECT ec.name, SUM(e.amount) as total
-      FROM expenses e JOIN expenses_category ec ON e.category_id=ec.id
-      WHERE strftime('%Y',e.date)=?
-      GROUP BY ec.id HAVING total>0 ORDER BY total DESC`, [year]);
-
-    const savAccs = await db.getAllAsync(`
-      SELECT sa.name, SUM(so.amount) as total
-      FROM savings_operations so JOIN savings_accounts sa ON so.account_id=sa.id
-      WHERE so.type='deposit' AND strftime('%Y',so.date)=?
-      GROUP BY sa.id HAVING total>0 ORDER BY total DESC`, [year]);
-
-    setData({ inc: inc.v, exp: exp.v, dep: dep.v, expCats, savAccs });
-  }, []);
+  const [rawData, setRawData] = useState(null);
 
   useFocusEffect(useCallback(() => {
-    loadYears();
-    loadYear(selected);
-  }, [selected]));
+    (async () => {
+      const [incomes, expenses, operations] = await Promise.all([
+        fetchIncomes(),
+        fetchExpenses(),
+        fetchSavingsOperations({ limit: 0 }),
+      ]);
+
+      const yearSet = new Set();
+      incomes.forEach(i => yearSet.add(i.date.slice(0, 4)));
+      expenses.forEach(e => yearSet.add(e.date.slice(0, 4)));
+      operations.filter(o => o.type === 'deposit').forEach(o => yearSet.add(o.date.slice(0, 4)));
+
+      setYears([...yearSet].sort().reverse());
+      setRawData({ incomes, expenses, operations });
+    })();
+  }, []));
+
+  useEffect(() => {
+    if (!rawData) return;
+    const { incomes, expenses, operations } = rawData;
+    const year = selected;
+
+    const yInc = incomes.filter(i => i.date.startsWith(year));
+    const yExp = expenses.filter(e => e.date.startsWith(year));
+    const yDep = operations.filter(o => o.type === 'deposit' && o.date.startsWith(year));
+
+    const inc = yInc.reduce((s, i) => s + i.amount, 0);
+    const exp = yExp.reduce((s, e) => s + e.amount, 0);
+    const dep = yDep.reduce((s, o) => s + o.amount, 0);
+
+    const catMap = {};
+    yExp.forEach(e => { catMap[e.category] = (catMap[e.category] || 0) + e.amount; });
+    const expCats = Object.entries(catMap).map(([name, total]) => ({ name, total })).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
+
+    const accMap = {};
+    yDep.forEach(o => { accMap[o.account_name] = (accMap[o.account_name] || 0) + o.amount; });
+    const savAccs = Object.entries(accMap).map(([name, total]) => ({ name, total })).filter(a => a.total > 0).sort((a, b) => b.total - a.total);
+
+    setData({ inc, exp, dep, expCats, savAccs });
+  }, [selected, rawData]);
 
   const fmt = v => Math.round(v).toLocaleString('pl-PL');
 
   const expPie = data?.expCats.map((c, i) => ({
     name: c.name, population: Math.round(c.total),
-    color: EXP_COLORS[i % EXP_COLORS.length],
-    legendFontColor: '#555', legendFontSize: 11,
+    color: EXP_COLORS[i % EXP_COLORS.length], legendFontColor: '#555', legendFontSize: 11,
   })) || [];
 
   const savPie = data?.savAccs.map((a, i) => ({
     name: a.name, population: Math.round(a.total),
-    color: SAV_COLORS[i % SAV_COLORS.length],
-    legendFontColor: '#555', legendFontSize: 11,
+    color: SAV_COLORS[i % SAV_COLORS.length], legendFontColor: '#555', legendFontSize: 11,
   })) || [];
 
   const chartConfig = {
@@ -79,8 +78,8 @@ export default function YearlyDetailScreen({ route, navigation }) {
 
   return (
     <ScrollView style={s.container}>
-      {/* Selektor lat */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.yearPicker} contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 12 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.yearPicker}
+        contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 12 }}>
         {years.map(y => (
           <TouchableOpacity key={y} style={[s.yearBtn, selected === y && s.yearBtnActive]} onPress={() => setSelected(y)}>
             <Text style={[s.yearBtnText, selected === y && s.yearBtnTextActive]}>{y}</Text>
@@ -90,7 +89,6 @@ export default function YearlyDetailScreen({ route, navigation }) {
 
       {data && (
         <>
-          {/* Liczby roczne */}
           <View style={s.summaryCard}>
             <Text style={s.summaryYear}>Rok {selected}</Text>
             <View style={s.summaryRow}>
@@ -107,22 +105,16 @@ export default function YearlyDetailScreen({ route, navigation }) {
             </View>
           </View>
 
-          {/* Pie - wydatki */}
           {expPie.length > 0 && (
             <View style={s.section}>
               <Text style={s.sectionTitle}>🥧 Na co wydano w {selected}</Text>
-              <PieChart data={expPie} width={W - 32} height={190}
-                chartConfig={chartConfig} accessor="population"
-                backgroundColor="transparent" paddingLeft="8" />
+              <PieChart data={expPie} width={W - 32} height={190} chartConfig={chartConfig} accessor="population" backgroundColor="transparent" paddingLeft="8" />
               {data.expCats.map((c, i) => (
                 <View key={i} style={s.catRow}>
                   <View style={[s.dot, { backgroundColor: EXP_COLORS[i % EXP_COLORS.length] }]} />
                   <Text style={s.catName}>{c.name}</Text>
                   <View style={s.barWrap}>
-                    <View style={[s.bar, {
-                      width: `${(c.total / data.expCats[0].total) * 100}%`,
-                      backgroundColor: EXP_COLORS[i % EXP_COLORS.length]
-                    }]} />
+                    <View style={[s.bar, { width: `${(c.total / data.expCats[0].total) * 100}%`, backgroundColor: EXP_COLORS[i % EXP_COLORS.length] }]} />
                   </View>
                   <Text style={s.catVal}>{fmt(c.total)} zł</Text>
                 </View>
@@ -130,22 +122,16 @@ export default function YearlyDetailScreen({ route, navigation }) {
             </View>
           )}
 
-          {/* Pie - oszczędności */}
           {savPie.length > 0 && (
             <View style={s.section}>
               <Text style={s.sectionTitle}>🏦 Gdzie odłożono w {selected}</Text>
-              <PieChart data={savPie} width={W - 32} height={190}
-                chartConfig={chartConfig} accessor="population"
-                backgroundColor="transparent" paddingLeft="8" />
+              <PieChart data={savPie} width={W - 32} height={190} chartConfig={chartConfig} accessor="population" backgroundColor="transparent" paddingLeft="8" />
               {data.savAccs.map((a, i) => (
                 <View key={i} style={s.catRow}>
                   <View style={[s.dot, { backgroundColor: SAV_COLORS[i % SAV_COLORS.length] }]} />
                   <Text style={s.catName}>{a.name}</Text>
                   <View style={s.barWrap}>
-                    <View style={[s.bar, {
-                      width: `${(a.total / data.savAccs[0].total) * 100}%`,
-                      backgroundColor: SAV_COLORS[i % SAV_COLORS.length]
-                    }]} />
+                    <View style={[s.bar, { width: `${(a.total / data.savAccs[0].total) * 100}%`, backgroundColor: SAV_COLORS[i % SAV_COLORS.length] }]} />
                   </View>
                   <Text style={s.catVal}>{fmt(a.total)} zł</Text>
                 </View>

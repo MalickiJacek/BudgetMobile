@@ -1,35 +1,34 @@
 import React, { useState, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, RefreshControl
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { PieChart } from 'react-native-chart-kit';
-import { getDb } from '../db/database';
+import { fetchExpenses } from '../db/database';
 
 const W = Dimensions.get('window').width;
 const COLORS = ['#e53935','#1e88e5','#43a047','#fb8c00','#8e24aa','#00897b','#f4511e','#3949ab','#00acc1','#7cb342','#fdd835','#6d4c41'];
 
 const PERIODS = [
-  { key: 'month',   label: 'Ten miesiąc' },
-  { key: '3months', label: 'Ostatnie 3 mies.' },
-  { key: 'year',    label: 'Ten rok' },
-  { key: 'lastyear',label: 'Poprzedni rok' },
+  { key: 'month',    label: 'Ten miesiąc' },
+  { key: '3months',  label: 'Ostatnie 3 mies.' },
+  { key: 'year',     label: 'Ten rok' },
+  { key: 'lastyear', label: 'Poprzedni rok' },
 ];
 
-function getPeriodFilter(key) {
+function filterByPeriod(expenses, key) {
   const now = new Date();
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
+  const ym = `${y}-${m}`;
 
-  if (key === 'month') return `strftime('%Y-%m',date)='${y}-${m}'`;
+  if (key === 'month') return expenses.filter(e => e.date.startsWith(ym));
   if (key === '3months') {
-    const d3 = new Date(now.getFullYear(), now.getMonth() - 2, 1);
-    const from = `${d3.getFullYear()}-${String(d3.getMonth() + 1).padStart(2, '0')}-01`;
-    return `date >= '${from}'`;
+    const from = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    const fromStr = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-01`;
+    return expenses.filter(e => e.date >= fromStr);
   }
-  if (key === 'year') return `strftime('%Y',date)='${y}'`;
-  if (key === 'lastyear') return `strftime('%Y',date)='${y - 1}'`;
-  return '1=1';
+  if (key === 'year') return expenses.filter(e => e.date.startsWith(String(y)));
+  if (key === 'lastyear') return expenses.filter(e => e.date.startsWith(String(y - 1)));
+  return expenses;
 }
 
 export default function ExpenseCategoryDetailScreen() {
@@ -37,29 +36,36 @@ export default function ExpenseCategoryDetailScreen() {
   const [cats, setCats] = useState([]);
   const [total, setTotal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [allExpenses, setAllExpenses] = useState([]);
 
   const load = useCallback(async (p = period) => {
-    const db = await getDb();
-    const filter = getPeriodFilter(p);
-    const data = await db.getAllAsync(`
-      SELECT ec.name, SUM(e.amount) as total
-      FROM expenses e JOIN expenses_category ec ON e.category_id=ec.id
-      WHERE ${filter}
-      GROUP BY ec.id HAVING total>0 ORDER BY total DESC`);
-    const tot = data.reduce((s, c) => s + c.total, 0);
+    const all = await fetchExpenses();
+    setAllExpenses(all);
+    computeCats(all, p);
+  }, []);
+
+  const computeCats = (all, p) => {
+    const filtered = filterByPeriod(all, p);
+    const catMap = {};
+    filtered.forEach(e => { catMap[e.category] = (catMap[e.category] || 0) + e.amount; });
+    const data = Object.entries(catMap).map(([name, total]) => ({ name, total })).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
     setCats(data);
-    setTotal(tot);
-  }, [period]);
+    setTotal(data.reduce((s, c) => s + c.total, 0));
+  };
 
   useFocusEffect(useCallback(() => { load(period); }, [period]));
   const onRefresh = async () => { setRefreshing(true); await load(period); setRefreshing(false); };
+
+  const handlePeriod = (p) => {
+    setPeriod(p);
+    computeCats(allExpenses, p);
+  };
 
   const fmt = v => Math.round(v).toLocaleString('pl-PL');
 
   const pieData = cats.slice(0, 8).map((c, i) => ({
     name: c.name, population: Math.round(c.total),
-    color: COLORS[i % COLORS.length],
-    legendFontColor: '#555', legendFontSize: 11,
+    color: COLORS[i % COLORS.length], legendFontColor: '#555', legendFontSize: 11,
   }));
 
   const chartConfig = {
@@ -68,23 +74,16 @@ export default function ExpenseCategoryDetailScreen() {
   };
 
   return (
-    <ScrollView
-      style={s.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      {/* Selektor okresu */}
+    <ScrollView style={s.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}
         style={s.periodBar} contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 12 }}>
         {PERIODS.map(p => (
-          <TouchableOpacity key={p.key}
-            style={[s.periodBtn, period === p.key && s.periodBtnActive]}
-            onPress={() => { setPeriod(p.key); load(p.key); }}>
+          <TouchableOpacity key={p.key} style={[s.periodBtn, period === p.key && s.periodBtnActive]} onPress={() => handlePeriod(p.key)}>
             <Text style={[s.periodText, period === p.key && s.periodTextActive]}>{p.label}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      {/* Suma */}
       <View style={s.totalCard}>
         <Text style={s.totalLabel}>{PERIODS.find(p => p.key === period)?.label}</Text>
         <Text style={s.totalVal}>{fmt(total)} zł</Text>
@@ -94,11 +93,9 @@ export default function ExpenseCategoryDetailScreen() {
       {pieData.length > 0 ? (
         <>
           <View style={s.section}>
-            <PieChart data={pieData} width={W - 32} height={200}
-              chartConfig={chartConfig} accessor="population"
-              backgroundColor="transparent" paddingLeft="8" />
+            <PieChart data={pieData} width={W - 32} height={200} chartConfig={chartConfig}
+              accessor="population" backgroundColor="transparent" paddingLeft="8" />
           </View>
-
           <View style={s.section}>
             <Text style={s.sectionTitle}>Podział wydatków</Text>
             {cats.map((c, i) => {

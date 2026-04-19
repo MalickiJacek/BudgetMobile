@@ -1,10 +1,8 @@
 import React, { useState, useCallback } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, Dimensions, RefreshControl
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Dimensions, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
-import { getDb } from '../db/database';
+import { fetchSavingsOperations, fetchSavingsSnapshots } from '../db/database';
 
 const W = Dimensions.get('window').width;
 
@@ -15,48 +13,41 @@ export default function SavingsAccountDetailScreen({ route }) {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    const db = await getDb();
+    const [allOps, rawSnapshots] = await Promise.all([
+      fetchSavingsOperations({ accountId, limit: 0 }),
+      fetchSavingsSnapshots(accountId),
+    ]);
 
-    // Wpłaty pogrupowane po miesiącach
-    const rawDeposits = await db.getAllAsync(
-      `SELECT strftime('%Y-%m', date) as month, SUM(amount) as total
-       FROM savings_operations
-       WHERE account_id=? AND type='deposit'
-       GROUP BY month ORDER BY month`,
-      [accountId]
-    );
+    const deposits = allOps.filter(o => o.type === 'deposit');
 
-    // Snapshoty — najnowszy na każdy miesiąc
-    const rawSnapshots = await db.getAllAsync(
-      `SELECT strftime('%Y-%m', snapshot_date) as month,
-              balance, snapshot_date
-       FROM savings_snapshots
-       WHERE account_id=?
-       ORDER BY snapshot_date ASC`,
-      [accountId]
-    );
+    // Grupuj wpłaty po miesiącach
+    const depositByMonth = {};
+    deposits.forEach(d => {
+      const month = d.date.slice(0, 7);
+      depositByMonth[month] = (depositByMonth[month] || 0) + d.amount;
+    });
+    const rawDeposits = Object.entries(depositByMonth).map(([month, total]) => ({ month, total })).sort((a, b) => a.month.localeCompare(b.month));
+
+    // Snapshoty z polem month
+    const snapsWithMonth = rawSnapshots.map(s => ({ ...s, month: s.snapshot_date.slice(0, 7) }));
 
     if (rawDeposits.length === 0 && rawSnapshots.length === 0) {
-      setChartData(null);
-      setStats(null);
-      return;
+      setChartData(null); setStats(null); return;
     }
 
-    // Buduj zunifikowaną oś czasu miesięcy
+    // Zbuduj oś czasu
     const allMonths = new Set([
       ...rawDeposits.map(d => d.month),
-      ...rawSnapshots.map(s => s.month),
+      ...snapsWithMonth.map(s => s.month),
     ]);
     const now = new Date();
     const nowMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     allMonths.add(nowMonth);
-
     const sortedMonths = [...allMonths].sort();
 
     // Skumulowane wpłaty
     const depositMap = {};
     rawDeposits.forEach(d => { depositMap[d.month] = d.total; });
-
     let cumulative = 0;
     const cumulativeByMonth = {};
     sortedMonths.forEach(m => {
@@ -64,11 +55,9 @@ export default function SavingsAccountDetailScreen({ route }) {
       cumulativeByMonth[m] = cumulative;
     });
 
-    // Snapshoty — ostatni dostępny na dany miesiąc
+    // Snapshoty — ostatni na każdy miesiąc (propaguj do przodu)
     const snapshotMap = {};
-    rawSnapshots.forEach(s => { snapshotMap[s.month] = s.balance; });
-
-    // Wypełnij luki w snapshotach (przenieś ostatnią wartość do przodu)
+    snapsWithMonth.forEach(s => { snapshotMap[s.month] = s.balance; });
     let lastSnap = null;
     const filledSnapshots = {};
     sortedMonths.forEach(m => {
@@ -76,29 +65,16 @@ export default function SavingsAccountDetailScreen({ route }) {
       if (lastSnap !== null) filledSnapshots[m] = lastSnap;
     });
 
-    // Punkty wykresu — tylko miesiące gdzie mamy obie wartości
-    const chartMonths = sortedMonths.filter(m =>
-      cumulativeByMonth[m] > 0 || filledSnapshots[m] !== undefined
-    );
-
-    // Etykiety — co ile miesięcy pokazać (max 7 etykiet)
+    const chartMonths = sortedMonths.filter(m => cumulativeByMonth[m] > 0 || filledSnapshots[m] !== undefined);
     const step = Math.max(1, Math.floor(chartMonths.length / 6));
-    const labels = chartMonths.map((m, i) =>
-      i % step === 0 ? m.slice(5) : ''
-    );
-
+    const labels = chartMonths.map((m, i) => i % step === 0 ? m.slice(5) : '');
     const depositsLine = chartMonths.map(m => Math.round(cumulativeByMonth[m] || 0));
-    const snapshotsLine = chartMonths.map(m =>
-      filledSnapshots[m] !== undefined ? Math.round(filledSnapshots[m]) : null
-    );
+    const snapshotsLine = chartMonths.map(m => filledSnapshots[m] !== undefined ? Math.round(filledSnapshots[m]) : null);
 
-    // Statystyki
     const totalDeposited = cumulative;
-    const latestBalance = rawSnapshots.length > 0
-      ? rawSnapshots[rawSnapshots.length - 1].balance : null;
+    const latestBalance = rawSnapshots.length > 0 ? rawSnapshots[rawSnapshots.length - 1].balance : null;
     const gain = latestBalance !== null ? latestBalance - totalDeposited : null;
-    const gainPct = totalDeposited > 0 && gain !== null
-      ? (gain / totalDeposited) * 100 : null;
+    const gainPct = totalDeposited > 0 && gain !== null ? (gain / totalDeposited) * 100 : null;
 
     setStats({ totalDeposited, latestBalance, gain, gainPct, snapshotCount: rawSnapshots.length, depositCount: rawDeposits.length });
     setChartData({ labels, depositsLine, snapshotsLine, chartMonths, snapshotMap });
@@ -122,33 +98,20 @@ export default function SavingsAccountDetailScreen({ route }) {
   const { labels, depositsLine, snapshotsLine } = chartData;
   const { totalDeposited, latestBalance, gain, gainPct } = stats;
 
-  // Filtruj null ze snapshotów dla wykresu
   const hasSnapshots = snapshotsLine.some(v => v !== null);
   const snapshotsFilled = snapshotsLine.map((v, i) => v !== null ? v : depositsLine[i]);
-
   const maxVal = Math.max(...depositsLine, ...snapshotsFilled);
   const minVal = Math.min(...depositsLine, ...snapshotsFilled);
   const padding = (maxVal - minVal) * 0.15 || 1000;
 
   const datasets = [
-    {
-      data: depositsLine,
-      color: () => '#9e9e9e',
-      strokeWidth: 2,
-    },
-    ...(hasSnapshots ? [{
-      data: snapshotsFilled,
-      color: () => accountColor || '#e65100',
-      strokeWidth: 2.5,
-    }] : []),
+    { data: depositsLine, color: () => '#9e9e9e', strokeWidth: 2 },
+    ...(hasSnapshots ? [{ data: snapshotsFilled, color: () => accountColor || '#e65100', strokeWidth: 2.5 }] : []),
   ];
 
   const chartConfig = {
-    backgroundColor: '#fff',
-    backgroundGradientFrom: '#fff',
-    backgroundGradientTo: '#fff',
-    decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(26,35,126,${opacity})`,
+    backgroundColor: '#fff', backgroundGradientFrom: '#fff', backgroundGradientTo: '#fff',
+    decimalPlaces: 0, color: (opacity = 1) => `rgba(26,35,126,${opacity})`,
     labelColor: () => '#999',
     propsForDots: { r: '4', strokeWidth: '2', stroke: '#fff' },
     propsForLabels: { fontSize: 10 },
@@ -157,20 +120,13 @@ export default function SavingsAccountDetailScreen({ route }) {
   const gainColor = gain === null ? '#999' : gain >= 0 ? '#2e7d32' : '#e53935';
 
   return (
-    <ScrollView
-      style={s.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      {/* Nagłówek konta */}
+    <ScrollView style={s.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
       <View style={[s.accountHeader, { backgroundColor: accountColor }]}>
         <Text style={s.accountName}>{accountName}</Text>
-        <Text style={s.accountBalance}>
-          {latestBalance != null ? `${fmt(latestBalance)} zł` : 'Brak snapshotu'}
-        </Text>
+        <Text style={s.accountBalance}>{latestBalance != null ? `${fmt(latestBalance)} zł` : 'Brak snapshotu'}</Text>
         <Text style={s.accountBalanceLabel}>aktualny stan konta</Text>
       </View>
 
-      {/* Statystyki */}
       <View style={s.statsRow}>
         <StatCard label="Wpłacono łącznie" value={`${fmt(totalDeposited)} zł`} color="#1565C0" />
         <StatCard
@@ -181,7 +137,6 @@ export default function SavingsAccountDetailScreen({ route }) {
         />
       </View>
 
-      {/* Legenda */}
       <View style={s.legend}>
         <View style={s.legendItem}>
           <View style={[s.legendDot, { backgroundColor: '#9e9e9e' }]} />
@@ -195,29 +150,16 @@ export default function SavingsAccountDetailScreen({ route }) {
         )}
       </View>
 
-      {/* Wykres */}
       <View style={s.chartWrap}>
         <LineChart
           data={{ labels, datasets }}
-          width={W - 32}
-          height={260}
-          chartConfig={chartConfig}
-          bezier
-          style={s.chart}
-          withDots={labels.length <= 12}
-          withInnerLines
-          withOuterLines={false}
-          fromNumber={Math.max(0, minVal - padding)}
-          yAxisSuffix=" zł"
-          formatYLabel={v => {
-            const n = parseInt(v);
-            if (n >= 1000) return `${Math.round(n / 1000)}k`;
-            return String(n);
-          }}
+          width={W - 32} height={260} chartConfig={chartConfig} bezier
+          style={s.chart} withDots={labels.length <= 12} withInnerLines withOuterLines={false}
+          fromNumber={Math.max(0, minVal - padding)} yAxisSuffix=" zł"
+          formatYLabel={v => { const n = parseInt(v); return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n); }}
         />
       </View>
 
-      {/* Interpretacja */}
       {hasSnapshots && gain !== null && (
         <View style={[s.insightBox, { backgroundColor: gain >= 0 ? '#e8f5e9' : '#fce4ec' }]}>
           <Text style={[s.insightTitle, { color: gainColor }]}>

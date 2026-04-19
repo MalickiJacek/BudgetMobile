@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { PieChart } from 'react-native-chart-kit';
-import { getDb } from '../db/database';
+import { fetchExpenses, fetchIncomes, fetchSavingsOperations, fetchSavingsAccounts } from '../db/database';
 import { useDemo } from '../context/DemoContext';
 
 const W = Dimensions.get('window').width;
@@ -16,60 +16,53 @@ export default function DashboardScreen({ navigation }) {
   const { isDemoMode, enterDemo, exitDemo } = useDemo();
 
   const load = useCallback(async () => {
-    const db = await getDb();
     const now = new Date();
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const year = String(now.getFullYear());
 
-    const [inc, exp, dep] = await Promise.all([
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM incomes WHERE strftime('%Y-%m',date)=?`, [ym]),
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM expenses WHERE strftime('%Y-%m',date)=?`, [ym]),
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM savings_operations WHERE type='deposit' AND strftime('%Y-%m',date)=?`, [ym]),
+    const [incomes, expenses, operations, accounts] = await Promise.all([
+      fetchIncomes(),
+      fetchExpenses(),
+      fetchSavingsOperations({ limit: 0 }),
+      fetchSavingsAccounts(),
     ]);
 
-    // Wydatki wg kategorii
-    const cats = await db.getAllAsync(`
-      SELECT ec.name, COALESCE(SUM(e.amount),0) as total
-      FROM expenses e JOIN expenses_category ec ON e.category_id=ec.id
-      WHERE strftime('%Y-%m',e.date)=?
-      GROUP BY ec.id ORDER BY total DESC`, [ym]);
+    const sumOf = (arr) => arr.reduce((s, x) => s + x.amount, 0);
 
-    // 6 miesięcy historia
+    const monthInc = incomes.filter(i => i.date.startsWith(ym));
+    const monthExp = expenses.filter(e => e.date.startsWith(ym));
+    const monthDep = operations.filter(o => o.type === 'deposit' && o.date.startsWith(ym));
+
+    const inc = sumOf(monthInc);
+    const exp = sumOf(monthExp);
+    const dep = sumOf(monthDep);
+
+    // Wydatki wg kategorii bieżącego miesiąca
+    const catMap = {};
+    monthExp.forEach(e => { catMap[e.category] = (catMap[e.category] || 0) + e.amount; });
+    const cats = Object.entries(catMap).map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total);
+
+    // 6 miesięcy historii
     const months = Array.from({ length: 6 }, (_, i) => {
       const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     });
 
-    const history = await Promise.all(months.map(async m => {
-      const [i, e, s] = await Promise.all([
-        db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM incomes WHERE strftime('%Y-%m',date)=?`, [m]),
-        db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM expenses WHERE strftime('%Y-%m',date)=?`, [m]),
-        db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM savings_operations WHERE type='deposit' AND strftime('%Y-%m',date)=?`, [m]),
-      ]);
-      return { label: m.slice(5), income: i.v, expense: e.v, savings: s.v };
+    const history = months.map(m => ({
+      label: m.slice(5),
+      income: sumOf(incomes.filter(i => i.date.startsWith(m))),
+      expense: sumOf(expenses.filter(e => e.date.startsWith(m))),
+      savings: sumOf(operations.filter(o => o.type === 'deposit' && o.date.startsWith(m))),
     }));
 
-    // Stan oszczędności z najnowszych snapshotów
-    const accounts = await db.getAllAsync(`
-      SELECT sa.name, sa.color,
-             ss.balance, ss.snapshot_date
-      FROM savings_accounts sa
-      LEFT JOIN savings_snapshots ss ON ss.id=(
-        SELECT id FROM savings_snapshots WHERE account_id=sa.id
-        ORDER BY snapshot_date DESC, id DESC LIMIT 1
-      )
-      ORDER BY sa.id`);
+    const totalSavings = accounts.reduce((s, a) => s + (a.last_balance || 0), 0);
 
-    const totalSavings = accounts.reduce((s, a) => s + (a.balance || 0), 0);
+    // Rok
+    const yearInc = sumOf(incomes.filter(i => i.date.startsWith(year)));
+    const yearExp = sumOf(expenses.filter(e => e.date.startsWith(year)));
+    const yearDep = sumOf(operations.filter(o => o.type === 'deposit' && o.date.startsWith(year)));
 
-    // Roczne podsumowanie
-    const year = String(now.getFullYear());
-    const [yearInc, yearExp, yearDep] = await Promise.all([
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM incomes WHERE strftime('%Y',date)=?`, [year]),
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM expenses WHERE strftime('%Y',date)=?`, [year]),
-      db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM savings_operations WHERE type='deposit' AND strftime('%Y',date)=?`, [year]),
-    ]);
-
-    setData({ inc: inc.v, exp: exp.v, dep: dep.v, cats, history, accounts, totalSavings, ym, yearInc: yearInc.v, yearExp: yearExp.v, yearDep: yearDep.v, year });
+    setData({ inc, exp, dep, cats, history, accounts, totalSavings, ym, yearInc, yearExp, yearDep, year });
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -86,8 +79,7 @@ export default function DashboardScreen({ navigation }) {
   const chartConfig = {
     backgroundColor: '#fff', backgroundGradientFrom: '#fff', backgroundGradientTo: '#fff',
     decimalPlaces: 0, color: (o = 1) => `rgba(26,35,126,${o})`,
-    labelColor: () => '#888',
-    propsForLabels: { fontSize: 10 },
+    labelColor: () => '#888', propsForLabels: { fontSize: 10 },
   };
 
   const pieData = cats.filter(c => c.total > 0).slice(0, 8).map((c, i) => ({
@@ -98,17 +90,14 @@ export default function DashboardScreen({ navigation }) {
 
   return (
     <ScrollView style={s.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-      {/* Miesiąc */}
       <Text style={s.month}>{monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}</Text>
 
-      {/* 3 karty */}
       <View style={s.row3}>
         <MetricCard label="Wpływy" value={`+${fmt(inc)} zł`} bg="#e8f5e9" color="#2e7d32" />
         <MetricCard label="Wydatki" value={`-${fmt(exp)} zł`} bg="#fce4ec" color="#c62828" />
         <MetricCard label="Oszczędności" value={`${fmt(dep)} zł`} bg="#e3f2fd" color="#1565c0" />
       </View>
 
-      {/* Bilans */}
       <TouchableOpacity style={[s.balanceCard, { backgroundColor: balance >= -10 ? '#e8f5e9' : '#fff3e0' }]}
         onPress={() => navigation.navigate('MonthlyBalances')}>
         <View>
@@ -120,7 +109,6 @@ export default function DashboardScreen({ navigation }) {
         </Text>
       </TouchableOpacity>
 
-      {/* Rok */}
       <TouchableOpacity style={s.yearCard}
         onPress={() => navigation.navigate('YearlyDetail', { initialYear: String(now.getFullYear()) })}>
         <Text style={s.sectionTitle}>📅 Rok {year}</Text>
@@ -132,7 +120,6 @@ export default function DashboardScreen({ navigation }) {
         </View>
       </TouchableOpacity>
 
-      {/* Oszczędności */}
       <TouchableOpacity style={s.section} onPress={() => navigation.navigate('SavingsPie')}>
         <View style={s.sectionRow}>
           <Text style={s.sectionTitle}>🏦 Oszczędności łącznie</Text>
@@ -143,14 +130,13 @@ export default function DashboardScreen({ navigation }) {
             <View style={[s.dot, { backgroundColor: a.color }]} />
             <Text style={s.accountName}>{a.name}</Text>
             <View style={{ alignItems: 'flex-end' }}>
-              <Text style={s.accountBal}>{a.balance != null ? `${fmt(a.balance)} zł` : '—'}</Text>
-              {a.snapshot_date && <Text style={s.accountDate}>{a.snapshot_date}</Text>}
+              <Text style={s.accountBal}>{a.last_balance != null ? `${fmt(a.last_balance)} zł` : '—'}</Text>
+              {a.last_date && <Text style={s.accountDate}>{a.last_date}</Text>}
             </View>
           </View>
         ))}
       </TouchableOpacity>
 
-      {/* Wykres 6 miesięcy */}
       {hasData && (
         <View style={s.section}>
           <Text style={s.sectionTitle}>📈 Ostatnie 6 miesięcy</Text>
@@ -163,17 +149,12 @@ export default function DashboardScreen({ navigation }) {
         </View>
       )}
 
-      {/* Wydatki wg kategorii */}
       {pieData.length > 0 && (
         <TouchableOpacity style={s.section} onPress={() => navigation.navigate('ExpenseCategoryDetail')}>
           <Text style={s.sectionTitle}>🥧 Na co wydajemy</Text>
           <Text style={s.sectionHint}>Bieżący miesiąc · dotknij po więcej →</Text>
-          <PieChart
-            data={pieData} width={W - 32} height={190}
-            chartConfig={chartConfig} accessor="population"
-            backgroundColor="transparent" paddingLeft="8"
-            style={s.chart}
-          />
+          <PieChart data={pieData} width={W - 32} height={190} chartConfig={chartConfig}
+            accessor="population" backgroundColor="transparent" paddingLeft="8" style={s.chart} />
           {cats.filter(c => c.total > 0).map((c, i) => (
             <View key={i} style={s.catRow}>
               <View style={[s.catDot, { backgroundColor: CAT_COLORS[i % CAT_COLORS.length] }]} />
@@ -187,12 +168,9 @@ export default function DashboardScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
-      {/* Przełącznik trybu demo */}
       <View style={s.devRow}>
         {isDemoMode && (
-          <View style={s.demoBadge}>
-            <Text style={s.demoBadgeText}>TRYB DEMO</Text>
-          </View>
+          <View style={s.demoBadge}><Text style={s.demoBadgeText}>TRYB DEMO</Text></View>
         )}
         <TouchableOpacity
           style={[s.devBtn, isDemoMode && { borderColor: '#1565c0' }]}

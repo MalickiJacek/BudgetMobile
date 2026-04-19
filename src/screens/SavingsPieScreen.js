@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Dimensions, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { PieChart } from 'react-native-chart-kit';
-import { getDb } from '../db/database';
+import { fetchSavingsAccounts } from '../db/database';
 
 const W = Dimensions.get('window').width;
 const COLORS = ['#1565C0','#6A1B9A','#2E7D32','#E65100','#AD1457','#00838F','#F57F17','#37474F'];
@@ -13,19 +13,11 @@ export default function SavingsPieScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    const db = await getDb();
-    const accs = await db.getAllAsync(`
-      SELECT sa.id, sa.name, sa.color,
-             ss.balance, ss.snapshot_date
-      FROM savings_accounts sa
-      LEFT JOIN savings_snapshots ss ON ss.id=(
-        SELECT id FROM savings_snapshots WHERE account_id=sa.id
-        ORDER BY snapshot_date DESC, id DESC LIMIT 1
-      )
-      ORDER BY COALESCE(ss.balance, 0) DESC`);
-
-    const withBalance = accs.filter(a => a.balance != null && a.balance > 0);
-    const tot = withBalance.reduce((s, a) => s + a.balance, 0);
+    const accs = await fetchSavingsAccounts();
+    // Sortuj po saldzie malejąco
+    accs.sort((a, b) => (b.last_balance || 0) - (a.last_balance || 0));
+    const withBalance = accs.filter(a => a.last_balance != null && a.last_balance > 0);
+    const tot = withBalance.reduce((s, a) => s + a.last_balance, 0);
     setAccounts(accs);
     setTotal(tot);
   }, []);
@@ -33,15 +25,13 @@ export default function SavingsPieScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
-  const withBalance = accounts.filter(a => a.balance != null && a.balance > 0);
+  const withBalance = accounts.filter(a => a.last_balance != null && a.last_balance > 0);
   const fmt = v => Math.round(v).toLocaleString('pl-PL');
 
   const pieData = withBalance.map((a, i) => ({
-    name: a.name,
-    population: Math.round(a.balance),
+    name: a.name, population: Math.round(a.last_balance),
     color: a.color || COLORS[i % COLORS.length],
-    legendFontColor: '#555',
-    legendFontSize: 11,
+    legendFontColor: '#555', legendFontSize: 11,
   }));
 
   const chartConfig = {
@@ -50,10 +40,7 @@ export default function SavingsPieScreen() {
   };
 
   return (
-    <ScrollView
-      style={s.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
+    <ScrollView style={s.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
       <View style={s.totalCard}>
         <Text style={s.totalLabel}>Łączne oszczędności</Text>
         <Text style={s.totalVal}>{fmt(total)} zł</Text>
@@ -62,11 +49,8 @@ export default function SavingsPieScreen() {
 
       {pieData.length > 0 ? (
         <View style={s.section}>
-          <PieChart
-            data={pieData} width={W - 32} height={210}
-            chartConfig={chartConfig} accessor="population"
-            backgroundColor="transparent" paddingLeft="8"
-          />
+          <PieChart data={pieData} width={W - 32} height={210} chartConfig={chartConfig}
+            accessor="population" backgroundColor="transparent" paddingLeft="8" />
         </View>
       ) : (
         <Text style={s.empty}>Brak snapshotów — dodaj stan kont w zakładce Oszczędności</Text>
@@ -74,20 +58,20 @@ export default function SavingsPieScreen() {
 
       <View style={s.section}>
         {accounts.map((a, i) => {
-          const pct = total > 0 && a.balance ? (a.balance / total) * 100 : 0;
+          const pct = total > 0 && a.last_balance ? (a.last_balance / total) * 100 : 0;
           return (
             <View key={a.id} style={s.row}>
               <View style={[s.dot, { backgroundColor: a.color || COLORS[i % COLORS.length] }]} />
               <View style={s.rowBody}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
                   <Text style={s.name}>{a.name}</Text>
-                  <Text style={s.val}>{a.balance != null ? `${fmt(a.balance)} zł` : '—'}</Text>
+                  <Text style={s.val}>{a.last_balance != null ? `${fmt(a.last_balance)} zł` : '—'}</Text>
                 </View>
                 <View style={s.barWrap}>
                   <View style={[s.bar, { width: `${pct}%`, backgroundColor: a.color || COLORS[i % COLORS.length] }]} />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
-                  <Text style={s.meta}>{a.snapshot_date ? `Stan na ${a.snapshot_date}` : 'Brak snapshotu'}</Text>
+                  <Text style={s.meta}>{a.last_date ? `Stan na ${a.last_date}` : 'Brak snapshotu'}</Text>
                   {pct > 0 && <Text style={s.pct}>{pct.toFixed(1)}%</Text>}
                 </View>
               </View>

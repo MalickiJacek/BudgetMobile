@@ -5,11 +5,13 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
-import { getDb, addDeposit, addWithdrawal } from '../db/database';
+import {
+  fetchSavingsAccounts, fetchSavingsOperations, fetchAllSnapshots,
+  addDeposit, addWithdrawal, addSnapshot, addSavingsAccount, deleteOperation,
+} from '../db/database';
 
 const today = () => new Date().toISOString().split('T')[0];
 const W = Dimensions.get('window').width;
-
 const COLORS = ['#1565C0','#6A1B9A','#2E7D32','#E65100','#AD1457','#00838F','#F57F17','#37474F'];
 
 export default function SavingsScreen({ navigation }) {
@@ -27,79 +29,45 @@ export default function SavingsScreen({ navigation }) {
   const [snapForm, setSnapForm] = useState({ account_id: null, balance: '', snapshot_date: today(), note: '' });
   const [accForm, setAccForm] = useState({ name: '', color: '#1565C0' });
 
-  const load = useCallback(async () => {
-    const db = await getDb();
-    const accs = await db.getAllAsync(`
-      SELECT sa.id, sa.name, sa.color,
-             ss.balance as last_balance,
-             ss.snapshot_date as last_date
-      FROM savings_accounts sa
-      LEFT JOIN savings_snapshots ss ON ss.id=(
-        SELECT id FROM savings_snapshots WHERE account_id=sa.id
-        ORDER BY snapshot_date DESC, id DESC LIMIT 1
-      )
-      ORDER BY sa.id`);
-
-    const ops = await db.getAllAsync(`
-      SELECT so.id, so.type, so.amount, so.date, so.description,
-             sa.name as account_name, sa.color
-      FROM savings_operations so
-      JOIN savings_accounts sa ON so.account_id=sa.id
-      ORDER BY so.date DESC, so.id DESC LIMIT 60`);
-
-    setAccounts(accs);
-    setOperations(ops);
-    setOpForm(f => ({ ...f, account_id: accs[0]?.id || null }));
-    setSnapForm(f => ({ ...f, account_id: accs[0]?.id || null }));
-
-    // Wykres trendu — sumaryczne oszczędności w czasie
-    await loadTrend(db);
-  }, []);
-
-  const loadTrend = async (db) => {
-    // Pobierz wszystkie snapshoty posortowane rosnąco
-    const snaps = await db.getAllAsync(`
-      SELECT account_id, balance, strftime('%Y-%m', snapshot_date) as month
-      FROM savings_snapshots
-      ORDER BY snapshot_date ASC, id ASC`);
-
+  const loadTrend = async () => {
+    const snaps = await fetchAllSnapshots();
     if (snaps.length === 0) { setTrendData(null); return; }
 
-    // Zbierz wszystkie miesiące
-    const allMonths = [...new Set(snaps.map(s => s.month))].sort();
-
-    // Dla każdego konta — propaguj ostatni znany snapshot
-    const accountIds = [...new Set(snaps.map(s => s.account_id))];
+    const allMonths = [...new Set(snaps.map(s => s.snapshot_date.slice(0, 7)))].sort();
     const lastByAccount = {};
 
     const monthlyTotals = allMonths.map(month => {
-      // Aktualizuj ostatni znany stan dla kont, które mają snapshot w tym miesiącu
-      snaps.filter(s => s.month === month).forEach(s => {
+      snaps.filter(s => s.snapshot_date.slice(0, 7) === month).forEach(s => {
         lastByAccount[s.account_id] = s.balance;
       });
-      // Suma wszystkich kont (te bez snapshotu nie liczą się do sumy)
       const total = Object.values(lastByAccount).reduce((s, v) => s + v, 0);
       return { month, total: Math.round(total) };
     });
 
-    // Etykiety — co ile miesięcy (max 7)
     const step = Math.max(1, Math.floor(monthlyTotals.length / 6));
     const labels = monthlyTotals.map((d, i) => i % step === 0 ? d.month.slice(5) : '');
     const values = monthlyTotals.map(d => d.total);
-
     setTrendData({ labels, values, months: monthlyTotals });
   };
+
+  const load = useCallback(async () => {
+    const [accs, ops] = await Promise.all([
+      fetchSavingsAccounts(),
+      fetchSavingsOperations({ limit: 60 }),
+    ]);
+    setAccounts(accs);
+    setOperations(ops);
+    setOpForm(f => ({ ...f, account_id: accs[0]?.id || null }));
+    setSnapForm(f => ({ ...f, account_id: accs[0]?.id || null }));
+    await loadTrend();
+  }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const openOpModal = (type) => { setOpType(type); setOpModal(true); };
 
   const saveOp = async () => {
-    if (!opForm.amount || !opForm.account_id) {
-      Alert.alert('Błąd', 'Podaj kwotę i wybierz konto');
-      return;
-    }
-    const db = await getDb();
+    if (!opForm.amount || !opForm.account_id) { Alert.alert('Błąd', 'Podaj kwotę i wybierz konto'); return; }
     const account = accounts.find(a => a.id === opForm.account_id);
     const payload = {
       account_id: opForm.account_id,
@@ -108,26 +76,21 @@ export default function SavingsScreen({ navigation }) {
       description: opForm.description || null,
       accountName: account?.name || '',
     };
-    if (opType === 'deposit') {
-      await addDeposit(db, payload);
-    } else {
-      await addWithdrawal(db, payload);
-    }
+    if (opType === 'deposit') await addDeposit(payload);
+    else await addWithdrawal(payload);
     setOpModal(false);
     setOpForm(f => ({ ...f, amount: '', description: '', date: today() }));
     load();
   };
 
   const saveSnapshot = async () => {
-    if (!snapForm.balance || !snapForm.account_id) {
-      Alert.alert('Błąd', 'Podaj stan konta i wybierz konto');
-      return;
-    }
-    const db = await getDb();
-    await db.runAsync(
-      `INSERT INTO savings_snapshots (account_id, balance, snapshot_date, note) VALUES (?,?,?,?)`,
-      [snapForm.account_id, parseFloat(snapForm.balance.replace(',', '.')), snapForm.snapshot_date, snapForm.note || null]
-    );
+    if (!snapForm.balance || !snapForm.account_id) { Alert.alert('Błąd', 'Podaj stan konta i wybierz konto'); return; }
+    await addSnapshot({
+      account_id: snapForm.account_id,
+      balance: parseFloat(snapForm.balance.replace(',', '.')),
+      snapshot_date: snapForm.snapshot_date,
+      note: snapForm.note || null,
+    });
     setSnapshotModal(false);
     setSnapForm(f => ({ ...f, balance: '', note: '', snapshot_date: today() }));
     load();
@@ -135,8 +98,7 @@ export default function SavingsScreen({ navigation }) {
 
   const saveAccount = async () => {
     if (!accForm.name.trim()) { Alert.alert('Błąd', 'Podaj nazwę konta'); return; }
-    const db = await getDb();
-    await db.runAsync('INSERT INTO savings_accounts (name, color) VALUES (?,?)', [accForm.name.trim(), accForm.color]);
+    await addSavingsAccount({ name: accForm.name.trim(), color: accForm.color });
     setAccountModal(false);
     setAccForm({ name: '', color: '#1565C0' });
     load();
@@ -144,14 +106,7 @@ export default function SavingsScreen({ navigation }) {
 
   const removeOp = (item) => Alert.alert('Usuń operację', 'Na pewno?', [
     { text: 'Anuluj' },
-    { text: 'Usuń', style: 'destructive', onPress: async () => {
-      const db = await getDb();
-      await db.runAsync('DELETE FROM savings_operations WHERE id=?', [item.id]);
-      if (item.type === 'withdrawal') {
-        await db.runAsync('DELETE FROM incomes WHERE savings_operation_id=?', [item.id]);
-      }
-      load();
-    }}
+    { text: 'Usuń', style: 'destructive', onPress: async () => { await deleteOperation(item.id, item.type); load(); } }
   ]);
 
   const totalSavings = accounts.reduce((s, a) => s + (a.last_balance || 0), 0);
@@ -166,7 +121,6 @@ export default function SavingsScreen({ navigation }) {
 
   return (
     <View style={s.container}>
-      {/* Tabs */}
       <View style={s.tabs}>
         {[['accounts','Konta'], ['operations','Historia'], ['trend','Wykres']].map(([t, label]) => (
           <TouchableOpacity key={t} style={[s.tab, tab === t && s.tabActive]} onPress={() => setTab(t)}>
@@ -175,7 +129,6 @@ export default function SavingsScreen({ navigation }) {
         ))}
       </View>
 
-      {/* Tab: Konta */}
       {tab === 'accounts' && (
         <ScrollView contentContainerStyle={{ paddingBottom: 120 }}>
           <View style={s.totalCard}>
@@ -185,38 +138,26 @@ export default function SavingsScreen({ navigation }) {
             </View>
             <Text style={s.totalVal}>{Math.round(totalSavings).toLocaleString('pl-PL')} zł</Text>
           </View>
-
           {accounts.map(a => (
             <TouchableOpacity key={a.id} style={s.accountCard} onPress={() =>
-              navigation.navigate('AccountDetail', {
-                accountId: a.id,
-                accountName: a.name,
-                accountColor: a.color,
-              })
-            }>
+              navigation.navigate('AccountDetail', { accountId: a.id, accountName: a.name, accountColor: a.color })}>
               <View style={[s.stripe, { backgroundColor: a.color }]} />
               <View style={s.accountBody}>
                 <Text style={s.accountName}>{a.name}</Text>
-                <Text style={s.accountDate}>
-                  {a.last_date ? `Stan na ${a.last_date}` : 'Brak danych — dodaj stan konta 📸'}
-                </Text>
+                <Text style={s.accountDate}>{a.last_date ? `Stan na ${a.last_date}` : 'Brak danych — dodaj stan konta 📸'}</Text>
               </View>
               <View style={{ alignItems: 'flex-end', paddingRight: 16 }}>
-                <Text style={s.accountBal}>
-                  {a.last_balance != null ? `${a.last_balance.toLocaleString('pl-PL')} zł` : '—'}
-                </Text>
+                <Text style={s.accountBal}>{a.last_balance != null ? `${a.last_balance.toLocaleString('pl-PL')} zł` : '—'}</Text>
                 <Text style={{ fontSize: 11, color: '#bbb', marginTop: 3 }}>dotknij →</Text>
               </View>
             </TouchableOpacity>
           ))}
-
           <TouchableOpacity style={s.addBtn} onPress={() => setAccountModal(true)}>
             <Text style={s.addBtnText}>+ Nowe konto oszczędnościowe</Text>
           </TouchableOpacity>
         </ScrollView>
       )}
 
-      {/* Tab: Historia */}
       {tab === 'operations' && (
         <FlatList
           data={operations}
@@ -244,7 +185,6 @@ export default function SavingsScreen({ navigation }) {
         />
       )}
 
-      {/* Tab: Wykres trendu */}
       {tab === 'trend' && (
         <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
           {trendData ? (
@@ -253,28 +193,15 @@ export default function SavingsScreen({ navigation }) {
                 <Text style={s.trendTitle}>Łączne oszczędności w czasie</Text>
                 <Text style={s.trendHint}>Suma ostatnich snapshotów wszystkich kont</Text>
               </View>
-
               <View style={s.chartCard}>
                 <LineChart
                   data={{ labels: trendData.labels, datasets: [{ data: trendData.values, strokeWidth: 2.5 }] }}
-                  width={W - 32}
-                  height={240}
-                  chartConfig={chartConfig}
-                  bezier
-                  style={{ borderRadius: 12 }}
-                  withDots={trendData.values.length <= 12}
-                  withInnerLines
-                  withOuterLines={false}
-                  yAxisSuffix=" zł"
-                  formatYLabel={v => {
-                    const n = parseInt(v);
-                    if (n >= 1000) return `${Math.round(n / 1000)}k`;
-                    return String(n);
-                  }}
+                  width={W - 32} height={240} chartConfig={chartConfig} bezier
+                  style={{ borderRadius: 12 }} withDots={trendData.values.length <= 12}
+                  withInnerLines withOuterLines={false} yAxisSuffix=" zł"
+                  formatYLabel={v => { const n = parseInt(v); return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n); }}
                 />
               </View>
-
-              {/* Tabela miesięcy */}
               <View style={s.trendTable}>
                 <Text style={s.trendTableTitle}>Historia miesięczna</Text>
                 {[...trendData.months].reverse().map((d, i) => {
@@ -304,7 +231,6 @@ export default function SavingsScreen({ navigation }) {
         </ScrollView>
       )}
 
-      {/* FABs */}
       <View style={s.fabs}>
         <TouchableOpacity style={[s.fabSm, { backgroundColor: '#37474f' }]} onPress={() => setSnapshotModal(true)}>
           <Text style={s.fabSmText}>📸</Text>
@@ -317,16 +243,12 @@ export default function SavingsScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* Modal - operacja (wpłata/wypłata) */}
+      {/* Modal - operacja */}
       <Modal visible={opModal} animationType="slide" presentationStyle="pageSheet">
         <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
-          <Text style={s.modalTitle}>
-            {opType === 'deposit' ? '↓ Wpłata na oszczędności' : '↑ Wypłata z oszczędności'}
-          </Text>
+          <Text style={s.modalTitle}>{opType === 'deposit' ? '↓ Wpłata na oszczędności' : '↑ Wypłata z oszczędności'}</Text>
           {opType === 'withdrawal' && (
-            <View style={s.infoBox}>
-              <Text style={s.infoText}>Wypłata zostanie automatycznie zarejestrowana jako wpływ w budżecie.</Text>
-            </View>
+            <View style={s.infoBox}><Text style={s.infoText}>Wypłata zostanie automatycznie zarejestrowana jako wpływ w budżecie.</Text></View>
           )}
           <Text style={s.label}>Konto</Text>
           <View style={s.pills}>
@@ -336,24 +258,14 @@ export default function SavingsScreen({ navigation }) {
             ))}
           </View>
           <Text style={s.label}>Kwota (zł)</Text>
-          <TextInput style={s.input} value={opForm.amount}
-            onChangeText={v => setOpForm(f => ({ ...f, amount: v }))}
-            keyboardType="decimal-pad" placeholder="0" autoFocus />
+          <TextInput style={s.input} value={opForm.amount} onChangeText={v => setOpForm(f => ({ ...f, amount: v }))} keyboardType="decimal-pad" placeholder="0" autoFocus />
           <Text style={s.label}>Data</Text>
-          <TextInput style={s.input} value={opForm.date}
-            onChangeText={v => setOpForm(f => ({ ...f, date: v }))}
-            placeholder="YYYY-MM-DD" />
+          <TextInput style={s.input} value={opForm.date} onChangeText={v => setOpForm(f => ({ ...f, date: v }))} placeholder="YYYY-MM-DD" />
           <Text style={s.label}>Opis (opcjonalnie)</Text>
-          <TextInput style={s.input} value={opForm.description}
-            onChangeText={v => setOpForm(f => ({ ...f, description: v }))}
-            placeholder="np. comiesięczna wpłata" />
+          <TextInput style={s.input} value={opForm.description} onChangeText={v => setOpForm(f => ({ ...f, description: v }))} placeholder="np. comiesięczna wpłata" />
           <View style={s.btnRow}>
-            <TouchableOpacity style={s.btnCancel} onPress={() => setOpModal(false)}>
-              <Text style={s.btnCancelText}>Anuluj</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.btnSave, { backgroundColor: opType === 'deposit' ? '#1565C0' : '#43a047' }]} onPress={saveOp}>
-              <Text style={s.btnSaveText}>Zapisz</Text>
-            </TouchableOpacity>
+            <TouchableOpacity style={s.btnCancel} onPress={() => setOpModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.btnSave, { backgroundColor: opType === 'deposit' ? '#1565C0' : '#43a047' }]} onPress={saveOp}><Text style={s.btnSaveText}>Zapisz</Text></TouchableOpacity>
           </View>
         </ScrollView>
       </Modal>
@@ -362,9 +274,7 @@ export default function SavingsScreen({ navigation }) {
       <Modal visible={snapshotModal} animationType="slide" presentationStyle="pageSheet">
         <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
           <Text style={s.modalTitle}>📸 Aktualizuj stan konta</Text>
-          <View style={s.infoBox}>
-            <Text style={s.infoText}>Wpisz aktualny stan wybranego konta. Zyski i straty zostaną uwzględnione automatycznie.</Text>
-          </View>
+          <View style={s.infoBox}><Text style={s.infoText}>Wpisz aktualny stan wybranego konta. Zyski i straty zostaną uwzględnione automatycznie.</Text></View>
           <Text style={s.label}>Konto</Text>
           <View style={s.pills}>
             {accounts.map(a => (
@@ -373,24 +283,14 @@ export default function SavingsScreen({ navigation }) {
             ))}
           </View>
           <Text style={s.label}>Aktualny stan (zł)</Text>
-          <TextInput style={s.input} value={snapForm.balance}
-            onChangeText={v => setSnapForm(f => ({ ...f, balance: v }))}
-            keyboardType="decimal-pad" placeholder="np. 15420" autoFocus />
+          <TextInput style={s.input} value={snapForm.balance} onChangeText={v => setSnapForm(f => ({ ...f, balance: v }))} keyboardType="decimal-pad" placeholder="np. 15420" autoFocus />
           <Text style={s.label}>Data</Text>
-          <TextInput style={s.input} value={snapForm.snapshot_date}
-            onChangeText={v => setSnapForm(f => ({ ...f, snapshot_date: v }))}
-            placeholder="YYYY-MM-DD" />
+          <TextInput style={s.input} value={snapForm.snapshot_date} onChangeText={v => setSnapForm(f => ({ ...f, snapshot_date: v }))} placeholder="YYYY-MM-DD" />
           <Text style={s.label}>Notatka (opcjonalnie)</Text>
-          <TextInput style={s.input} value={snapForm.note}
-            onChangeText={v => setSnapForm(f => ({ ...f, note: v }))}
-            placeholder="np. po wypłacie odsetek" />
+          <TextInput style={s.input} value={snapForm.note} onChangeText={v => setSnapForm(f => ({ ...f, note: v }))} placeholder="np. po wypłacie odsetek" />
           <View style={s.btnRow}>
-            <TouchableOpacity style={s.btnCancel} onPress={() => setSnapshotModal(false)}>
-              <Text style={s.btnCancelText}>Anuluj</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.btnSave, { backgroundColor: '#37474f' }]} onPress={saveSnapshot}>
-              <Text style={s.btnSaveText}>Zapisz</Text>
-            </TouchableOpacity>
+            <TouchableOpacity style={s.btnCancel} onPress={() => setSnapshotModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.btnSave, { backgroundColor: '#37474f' }]} onPress={saveSnapshot}><Text style={s.btnSaveText}>Zapisz</Text></TouchableOpacity>
           </View>
         </ScrollView>
       </Modal>
@@ -400,9 +300,7 @@ export default function SavingsScreen({ navigation }) {
         <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
           <Text style={s.modalTitle}>Nowe konto</Text>
           <Text style={s.label}>Nazwa</Text>
-          <TextInput style={s.input} value={accForm.name}
-            onChangeText={v => setAccForm(f => ({ ...f, name: v }))}
-            placeholder="np. IKE Plus, Lokata PKO..." autoFocus />
+          <TextInput style={s.input} value={accForm.name} onChangeText={v => setAccForm(f => ({ ...f, name: v }))} placeholder="np. IKE Plus, Lokata PKO..." autoFocus />
           <Text style={s.label}>Kolor</Text>
           <View style={s.colorRow}>
             {COLORS.map(c => (
@@ -411,12 +309,8 @@ export default function SavingsScreen({ navigation }) {
             ))}
           </View>
           <View style={s.btnRow}>
-            <TouchableOpacity style={s.btnCancel} onPress={() => setAccountModal(false)}>
-              <Text style={s.btnCancelText}>Anuluj</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.btnSave, { backgroundColor: accForm.color }]} onPress={saveAccount}>
-              <Text style={s.btnSaveText}>Dodaj konto</Text>
-            </TouchableOpacity>
+            <TouchableOpacity style={s.btnCancel} onPress={() => setAccountModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
+            <TouchableOpacity style={[s.btnSave, { backgroundColor: accForm.color }]} onPress={saveAccount}><Text style={s.btnSaveText}>Dodaj konto</Text></TouchableOpacity>
           </View>
         </ScrollView>
       </Modal>
@@ -437,7 +331,6 @@ const s = StyleSheet.create({
   tabActive: { borderBottomWidth: 2.5, borderBottomColor: '#1565C0' },
   tabText: { fontSize: 14, color: '#aaa', fontWeight: '600' },
   tabTextActive: { color: '#1565C0' },
-
   totalCard: { margin: 16, marginBottom: 10, backgroundColor: '#1a237e', borderRadius: 18, padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalLabel: { color: 'rgba(255,255,255,0.85)', fontSize: 14, fontWeight: '700' },
   totalHint: { color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 3 },
@@ -450,7 +343,6 @@ const s = StyleSheet.create({
   accountBal: { fontSize: 17, fontWeight: '800', color: '#1a237e', paddingRight: 16 },
   addBtn: { marginHorizontal: 14, marginTop: 10, padding: 16, borderRadius: 14, borderWidth: 1.5, borderColor: '#1565C0', borderStyle: 'dashed', alignItems: 'center' },
   addBtnText: { color: '#1565C0', fontSize: 15, fontWeight: '600' },
-
   empty: { color: '#bbb', textAlign: 'center', marginTop: 60, fontSize: 15 },
   opRow: { backgroundColor: '#fff', marginHorizontal: 14, marginVertical: 4, borderRadius: 12, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   opIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
@@ -461,7 +353,6 @@ const s = StyleSheet.create({
   opTag: { fontSize: 10, color: '#43a047', marginTop: 3, fontWeight: '600' },
   opAmount: { fontSize: 15, fontWeight: '800' },
   opDate: { fontSize: 11, color: '#bbb', marginTop: 2 },
-
   trendHeader: { margin: 16, marginBottom: 8 },
   trendTitle: { fontSize: 16, fontWeight: '700', color: '#333' },
   trendHint: { fontSize: 12, color: '#aaa', marginTop: 4 },
@@ -476,13 +367,11 @@ const s = StyleSheet.create({
   emptyIcon: { fontSize: 48, marginBottom: 16 },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 8 },
   emptyHint: { fontSize: 14, color: '#999', textAlign: 'center', lineHeight: 20 },
-
   fabs: { position: 'absolute', bottom: 24, right: 16, flexDirection: 'row', gap: 10, alignItems: 'center' },
   fab: { width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 6, elevation: 6 },
   fabText: { color: '#fff', fontSize: 26, fontWeight: '800' },
   fabSm: { width: 46, height: 46, borderRadius: 23, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
   fabSmText: { color: '#fff', fontSize: 22, fontWeight: '800' },
-
   modal: { flex: 1, padding: 20, backgroundColor: '#fff' },
   modalTitle: { fontSize: 22, fontWeight: '800', color: '#333', marginTop: 10, marginBottom: 16 },
   infoBox: { backgroundColor: '#f0f4ff', borderRadius: 10, padding: 12, marginBottom: 8 },

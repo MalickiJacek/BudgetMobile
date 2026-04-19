@@ -1,39 +1,35 @@
 import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getDb } from '../db/database';
+import { fetchIncomes, fetchExpenses, fetchSavingsOperations } from '../db/database';
 
 export default function MonthlyBalancesScreen() {
   const [months, setMonths] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    const db = await getDb();
+    const [incomes, expenses, operations] = await Promise.all([
+      fetchIncomes(),
+      fetchExpenses(),
+      fetchSavingsOperations({ limit: 0 }),
+    ]);
 
-    // Wszystkie miesiące z jakimikolwiek danymi
-    const raw = await db.getAllAsync(`
-      SELECT month FROM (
-        SELECT strftime('%Y-%m', date) as month FROM incomes
-        UNION
-        SELECT strftime('%Y-%m', date) FROM expenses
-        UNION
-        SELECT strftime('%Y-%m', date) FROM savings_operations WHERE type='deposit'
-      )
-      GROUP BY month ORDER BY month DESC
-    `);
+    const monthSet = new Set();
+    incomes.forEach(i => monthSet.add(i.date.slice(0, 7)));
+    expenses.forEach(e => monthSet.add(e.date.slice(0, 7)));
+    operations.filter(o => o.type === 'deposit').forEach(o => monthSet.add(o.date.slice(0, 7)));
 
-    const results = await Promise.all(raw.map(async ({ month }) => {
-      const [inc, exp, dep] = await Promise.all([
-        db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM incomes WHERE strftime('%Y-%m',date)=?`, [month]),
-        db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM expenses WHERE strftime('%Y-%m',date)=?`, [month]),
-        db.getFirstAsync(`SELECT COALESCE(SUM(amount),0) as v FROM savings_operations WHERE type='deposit' AND strftime('%Y-%m',date)=?`, [month]),
-      ]);
-      const balance = inc.v - exp.v - dep.v;
+    const sortedMonths = [...monthSet].sort().reverse();
+
+    const results = sortedMonths.map(month => {
+      const mInc = incomes.filter(i => i.date.startsWith(month)).reduce((s, i) => s + i.amount, 0);
+      const mExp = expenses.filter(e => e.date.startsWith(month)).reduce((s, e) => s + e.amount, 0);
+      const mDep = operations.filter(o => o.type === 'deposit' && o.date.startsWith(month)).reduce((s, o) => s + o.amount, 0);
+      const balance = mInc - mExp - mDep;
       const [y, m] = month.split('-');
-      const label = new Date(parseInt(y), parseInt(m) - 1, 1)
-        .toLocaleString('pl-PL', { month: 'long', year: 'numeric' });
-      return { month, label, inc: inc.v, exp: exp.v, dep: dep.v, balance };
-    }));
+      const label = new Date(parseInt(y), parseInt(m) - 1, 1).toLocaleString('pl-PL', { month: 'long', year: 'numeric' });
+      return { month, label, inc: mInc, exp: mExp, dep: mDep, balance };
+    });
 
     setMonths(results);
   }, []);

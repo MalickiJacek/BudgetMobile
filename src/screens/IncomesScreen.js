@@ -4,7 +4,11 @@ import {
   Modal, TextInput, Alert, ScrollView
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getDb } from '../db/database';
+import {
+  fetchIncomes, fetchIncomeCategories,
+  addIncome, updateIncome, deleteIncome,
+  addIncomeCategory, deleteIncomeCategory, countIncomesByCategory,
+} from '../db/database';
 
 const todayStr = () => new Date().toISOString().split('T')[0];
 const currentMonthStr = () => new Date().toISOString().slice(0, 7);
@@ -32,16 +36,7 @@ export default function IncomesScreen() {
   const [newCatName, setNewCatName] = useState('');
 
   const load = useCallback(async () => {
-    const db = await getDb();
-    const data = await db.getAllAsync(`
-      SELECT i.id, i.description, i.amount, i.date, i.category_id,
-             ic.name as category, ic.is_savings_withdrawal,
-             i.savings_operation_id
-      FROM incomes i
-      JOIN incomes_category ic ON i.category_id = ic.id
-      ORDER BY i.date DESC, i.id DESC`);
-    const cats = await db.getAllAsync(
-      'SELECT * FROM incomes_category WHERE is_savings_withdrawal=0 ORDER BY name');
+    const [data, cats] = await Promise.all([fetchIncomes(), fetchIncomeCategories()]);
     setAllIncomes(data);
     setCategories(cats);
   }, []);
@@ -64,12 +59,7 @@ export default function IncomesScreen() {
       return;
     }
     setEditingItem(item);
-    setForm({
-      description: item.description || '',
-      amount: String(item.amount),
-      category_id: item.category_id,
-      date: item.date,
-    });
+    setForm({ description: item.description || '', amount: String(item.amount), category_id: item.category_id, date: item.date });
     setModalVisible(true);
   };
 
@@ -78,18 +68,11 @@ export default function IncomesScreen() {
       Alert.alert('Błąd', 'Wypełnij kwotę, kategorię i datę');
       return;
     }
-    const db = await getDb();
     const amount = parseFloat(String(form.amount).replace(',', '.'));
     if (editingItem) {
-      await db.runAsync(
-        `UPDATE incomes SET description=?, category_id=?, amount=?, date=? WHERE id=?`,
-        [form.description || null, form.category_id, amount, form.date, editingItem.id]
-      );
+      await updateIncome(editingItem.id, { description: form.description || null, category_id: form.category_id, amount, date: form.date });
     } else {
-      await db.runAsync(
-        `INSERT INTO incomes (description, category_id, amount, date) VALUES (?,?,?,?)`,
-        [form.description || null, form.category_id, amount, form.date]
-      );
+      await addIncome({ description: form.description || null, category_id: form.category_id, amount, date: form.date });
     }
     setModalVisible(false);
     load();
@@ -102,20 +85,15 @@ export default function IncomesScreen() {
     }
     Alert.alert('Usuń wpływ', 'Na pewno?', [
       { text: 'Anuluj' },
-      { text: 'Usuń', style: 'destructive', onPress: async () => {
-        const db = await getDb();
-        await db.runAsync('DELETE FROM incomes WHERE id=?', [item.id]);
-        load();
-      }}
+      { text: 'Usuń', style: 'destructive', onPress: async () => { await deleteIncome(item.id); load(); } }
     ]);
   };
 
-  const addCategory = async () => {
+  const addCat = async () => {
     const name = newCatName.trim();
     if (!name) return;
-    const db = await getDb();
     try {
-      await db.runAsync('INSERT INTO incomes_category (name, is_savings_withdrawal) VALUES (?, 0)', [name]);
+      await addIncomeCategory(name);
       setNewCatName('');
       load();
     } catch {
@@ -123,19 +101,15 @@ export default function IncomesScreen() {
     }
   };
 
-  const removeCategory = async (cat) => {
-    const db = await getDb();
-    const { cnt } = await db.getFirstAsync('SELECT COUNT(*) as cnt FROM incomes WHERE category_id=?', [cat.id]);
+  const removeCat = async (cat) => {
+    const cnt = await countIncomesByCategory(cat.id);
     if (cnt > 0) {
       Alert.alert('Nie można usunąć', `Kategoria "${cat.name}" ma ${cnt} wpływ${cnt === 1 ? '' : cnt < 5 ? 'y' : 'ów'}. Najpierw usuń powiązane wpisy.`);
       return;
     }
     Alert.alert('Usuń kategorię', `Usunąć "${cat.name}"?`, [
       { text: 'Anuluj' },
-      { text: 'Usuń', style: 'destructive', onPress: async () => {
-        await db.runAsync('DELETE FROM incomes_category WHERE id=?', [cat.id]);
-        load();
-      }}
+      { text: 'Usuń', style: 'destructive', onPress: async () => { await deleteIncomeCategory(cat.id); load(); } }
     ]);
   };
 
@@ -143,7 +117,6 @@ export default function IncomesScreen() {
 
   return (
     <View style={s.container}>
-      {/* Nagłówek z wyborem miesiąca */}
       <View style={s.header}>
         <TouchableOpacity style={s.arrow} onPress={() => setSelectedMonth(m => shiftMonth(m, -1))}>
           <Text style={s.arrowText}>‹</Text>
@@ -152,10 +125,7 @@ export default function IncomesScreen() {
           <Text style={s.headerMonth}>{fmtMonthLabel(selectedMonth)}</Text>
           <Text style={s.headerVal}>+{fmt(monthTotal)} zł</Text>
         </View>
-        <TouchableOpacity
-          style={s.arrow}
-          onPress={() => !isCurrentMonth && setSelectedMonth(m => shiftMonth(m, 1))}
-        >
+        <TouchableOpacity style={s.arrow} onPress={() => !isCurrentMonth && setSelectedMonth(m => shiftMonth(m, 1))}>
           <Text style={[s.arrowText, isCurrentMonth && s.arrowDisabled]}>›</Text>
         </TouchableOpacity>
       </View>
@@ -171,9 +141,7 @@ export default function IncomesScreen() {
               <View style={s.rowTitleRow}>
                 <Text style={s.rowDesc}>{item.description || item.category}</Text>
                 {item.is_savings_withdrawal === 1 && (
-                  <View style={s.badge}>
-                    <Text style={s.badgeText}>🏦 oszczędności</Text>
-                  </View>
+                  <View style={s.badge}><Text style={s.badgeText}>🏦 oszczędności</Text></View>
                 )}
               </View>
               <Text style={s.rowMeta}>{item.category} · {item.date}</Text>
@@ -190,7 +158,6 @@ export default function IncomesScreen() {
         <Text style={s.fabText}>+</Text>
       </TouchableOpacity>
 
-      {/* Modal — dodaj / edytuj */}
       <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
         <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
           <Text style={s.modalTitle}>{editingItem ? 'Edytuj wpływ' : 'Nowy wpływ'}</Text>
@@ -240,7 +207,6 @@ export default function IncomesScreen() {
         </ScrollView>
       </Modal>
 
-      {/* Modal — zarządzanie kategoriami */}
       <Modal visible={catModal} animationType="slide" presentationStyle="pageSheet">
         <View style={[s.modal, { flex: 1 }]}>
           <Text style={s.modalTitle}>Kategorie wpływów</Text>
@@ -248,26 +214,21 @@ export default function IncomesScreen() {
             {categories.map(cat => (
               <View key={cat.id} style={s.catRow}>
                 <Text style={s.catRowName}>{cat.name}</Text>
-                <TouchableOpacity style={s.catDelBtn} onPress={() => removeCategory(cat)}>
+                <TouchableOpacity style={s.catDelBtn} onPress={() => removeCat(cat)}>
                   <Text style={s.catDelText}>✕</Text>
                 </TouchableOpacity>
               </View>
             ))}
           </ScrollView>
           <View style={s.catAddRow}>
-            <TextInput
-              style={[s.input, { flex: 1 }]}
-              value={newCatName}
-              onChangeText={setNewCatName}
-              placeholder="Nazwa nowej kategorii..."
-              onSubmitEditing={addCategory}
-            />
-            <TouchableOpacity style={s.catAddBtn} onPress={addCategory}>
+            <TextInput style={[s.input, { flex: 1 }]} value={newCatName}
+              onChangeText={setNewCatName} placeholder="Nazwa nowej kategorii..."
+              onSubmitEditing={addCat} />
+            <TouchableOpacity style={s.catAddBtn} onPress={addCat}>
               <Text style={s.catAddBtnText}>Dodaj</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            style={[s.btnCancel, { marginTop: 14, marginBottom: 40 }]}
+          <TouchableOpacity style={[s.btnCancel, { marginTop: 14, marginBottom: 40 }]}
             onPress={() => { setCatModal(false); setTimeout(() => setModalVisible(true), 350); }}>
             <Text style={s.btnCancelText}>Zamknij</Text>
           </TouchableOpacity>
@@ -278,16 +239,13 @@ export default function IncomesScreen() {
 }
 
 const Pill = ({ label, active, color, onPress }) => (
-  <TouchableOpacity
-    style={[s.pill, active && { backgroundColor: color, borderColor: color }]}
-    onPress={onPress}>
+  <TouchableOpacity style={[s.pill, active && { backgroundColor: color, borderColor: color }]} onPress={onPress}>
     <Text style={[s.pillText, active && { color: '#fff', fontWeight: '700' }]}>{label}</Text>
   </TouchableOpacity>
 );
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f2f3f7' },
-
   header: { backgroundColor: '#43a047', flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 8 },
   arrow: { width: 44, alignItems: 'center', justifyContent: 'center' },
   arrowText: { color: '#fff', fontSize: 28, fontWeight: '300', lineHeight: 34 },
@@ -295,7 +253,6 @@ const s = StyleSheet.create({
   headerCenter: { flex: 1, alignItems: 'center' },
   headerMonth: { color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: '600', marginBottom: 2 },
   headerVal: { color: '#fff', fontSize: 24, fontWeight: '800' },
-
   empty: { color: '#bbb', textAlign: 'center', marginTop: 60, fontSize: 15 },
   row: { backgroundColor: '#fff', marginHorizontal: 14, marginVertical: 4, borderRadius: 12, padding: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   rowLeft: { flex: 1, marginRight: 12 },
@@ -307,22 +264,17 @@ const s = StyleSheet.create({
   rowRight: { alignItems: 'flex-end' },
   rowAmount: { fontSize: 16, fontWeight: '800', color: '#43a047' },
   editHint: { fontSize: 10, color: '#ccc', marginTop: 3 },
-
   fab: { position: 'absolute', bottom: 24, right: 20, width: 56, height: 56, borderRadius: 28, backgroundColor: '#43a047', justifyContent: 'center', alignItems: 'center', shadowColor: '#43a047', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 6 },
   fabText: { color: '#fff', fontSize: 30, lineHeight: 34 },
-
   modal: { flex: 1, padding: 20, backgroundColor: '#fff' },
   modalTitle: { fontSize: 22, fontWeight: '800', color: '#333', marginTop: 10, marginBottom: 20 },
-
   labelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 18, marginBottom: 8 },
   label: { fontSize: 11, color: '#888', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
   manageLink: { fontSize: 13, color: '#43a047', fontWeight: '600' },
-
   input: { borderWidth: 1.5, borderColor: '#ececec', borderRadius: 12, padding: 14, fontSize: 16, backgroundColor: '#fafafa' },
   pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pill: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 22, borderWidth: 1.5, borderColor: '#e0e0e0', backgroundColor: '#f8f8f8' },
   pillText: { color: '#555', fontSize: 13 },
-
   btnRow: { flexDirection: 'row', gap: 10, marginTop: 32, marginBottom: 48 },
   btnCancel: { flex: 1, padding: 16, borderRadius: 14, borderWidth: 1.5, borderColor: '#e0e0e0', alignItems: 'center' },
   btnCancelText: { color: '#888', fontSize: 15, fontWeight: '600' },
@@ -330,7 +282,6 @@ const s = StyleSheet.create({
   btnDeleteText: { color: '#e53935', fontSize: 15, fontWeight: '600' },
   btnSave: { flex: 2, padding: 16, borderRadius: 14, alignItems: 'center' },
   btnSaveText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-
   catRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
   catRowName: { flex: 1, fontSize: 15, color: '#333' },
   catDelBtn: { padding: 8 },
