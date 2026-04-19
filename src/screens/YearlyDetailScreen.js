@@ -147,7 +147,7 @@ export default function YearlyDetailScreen({ route }) {
 
 const SummaryItem = ({ label, value, color }) => (
   <View style={{ alignItems: 'center', flex: 1 }}>
-    <Text style={[{ fontSize: 17, fontWeight: '800', color }]}>{value}</Text>
+    <Text style={{ fontSize: 17, fontWeight: '800', color }}>{value}</Text>
     <Text style={{ fontSize: 11, color: '#999', marginTop: 4 }}>{label}</Text>
   </View>
 );

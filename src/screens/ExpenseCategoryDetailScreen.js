@@ -38,22 +38,22 @@ export default function ExpenseCategoryDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [allExpenses, setAllExpenses] = useState([]);
 
-  const load = useCallback(async (p = period) => {
-    const all = await fetchExpenses();
-    setAllExpenses(all);
-    computeCats(all, p);
-  }, []);
-
-  const computeCats = (all, p) => {
+  const computeCats = useCallback((all, p) => {
     const filtered = filterByPeriod(all, p);
     const catMap = {};
     filtered.forEach(e => { catMap[e.category] = (catMap[e.category] || 0) + e.amount; });
     const data = Object.entries(catMap).map(([name, total]) => ({ name, total })).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
     setCats(data);
     setTotal(data.reduce((s, c) => s + c.total, 0));
-  };
+  }, []);
 
-  useFocusEffect(useCallback(() => { load(period); }, [period]));
+  const load = useCallback(async (p) => {
+    const all = await fetchExpenses();
+    setAllExpenses(all);
+    computeCats(all, p);
+  }, [computeCats]);
+
+  useFocusEffect(useCallback(() => { load(period); }, [load, period]));
   const onRefresh = async () => { setRefreshing(true); await load(period); setRefreshing(false); };
 
   const handlePeriod = (p) => {

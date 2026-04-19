@@ -201,7 +201,7 @@ export default function DashboardScreen({ navigation }) {
 const fmt = v => Math.round(v).toLocaleString('pl-PL');
 
 const MetricCard = ({ label, value, bg, color }) => (
-  <View style={[{ flex: 1, borderRadius: 12, padding: 12, backgroundColor: bg }]}>
+  <View style={{ flex: 1, borderRadius: 12, padding: 12, backgroundColor: bg }}>
     <Text style={{ fontSize: 10, color: '#666', fontWeight: '700', marginBottom: 5 }}>{label.toUpperCase()}</Text>
     <Text style={{ fontSize: 14, fontWeight: '800', color }}>{value}</Text>
   </View>
