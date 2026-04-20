@@ -102,7 +102,8 @@ export default function ExpensesScreen() {
       const otherCats = categories.filter(c => c.id !== cat.id);
       setReassignSource({ ...cat, cnt });
       setReassignTarget(otherCats[0]?.id || null);
-      setReassignModal(true);
+      setCatModal(false);
+      setTimeout(() => setReassignModal(true), 400);
       return;
     }
     Alert.alert('Usuń kategorię', `Usunąć "${cat.name}"?`, [
@@ -230,7 +231,7 @@ export default function ExpensesScreen() {
                 <Text style={s.catAddBtnText}>Dodaj</Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity style={[s.btnCancel, { marginTop: 14, marginBottom: 40 }]}
+            <TouchableOpacity style={s.closeBtn}
               onPress={() => { setCatModal(false); setTimeout(() => setModalVisible(true), 350); }}>
               <Text style={s.btnCancelText}>Zamknij</Text>
             </TouchableOpacity>
@@ -314,6 +315,7 @@ const s = StyleSheet.create({
   catRowName: { flex: 1, fontSize: 15, color: '#333' },
   catDelBtn: { padding: 8 },
   catDelText: { fontSize: 16, color: '#ccc', fontWeight: '600' },
+  closeBtn: { alignSelf: 'stretch', padding: 16, borderRadius: 14, borderWidth: 1.5, borderColor: '#e0e0e0', alignItems: 'center', marginTop: 14, marginBottom: 40 },
   infoBox: { backgroundColor: '#fff3f3', borderRadius: 10, padding: 12, marginBottom: 8 },
   infoText: { fontSize: 13, color: '#c62828', lineHeight: 20 },
   catAddRow: { flexDirection: 'row', gap: 10, marginTop: 20 },
