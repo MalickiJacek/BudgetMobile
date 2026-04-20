@@ -16,18 +16,6 @@ export async function initDb() {
   if (error) throw new Error('Brak połączenia z bazą danych: ' + error.message);
 }
 
-export async function checkMigration() {
-  const { data } = await supabase
-    .from('app_metadata')
-    .select('value')
-    .eq('key', 'real_data_imported')
-    .maybeSingle();
-  return !!data;
-}
-
-export async function setMigrationDone() {
-  await supabase.from('app_metadata').upsert({ key: 'real_data_imported', value: '1' });
-}
 
 // ── EXPENSES ─────────────────────────────────────────────────────────────────
 

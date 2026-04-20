@@ -3,8 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { initDb, checkMigration, setMigrationDone } from './src/db/database';
-import { importFromAppBudget } from './src/db/migrate';
+import { initDb } from './src/db/database';
 import { DemoProvider, useDemo } from './src/context/DemoContext';
 
 import DashboardScreen from './src/screens/DashboardScreen';
@@ -81,11 +80,6 @@ export default function App() {
     (async () => {
       try {
         await initDb();
-        const migrated = await checkMigration();
-        if (!migrated) {
-          await importFromAppBudget();
-          await setMigrationDone();
-        }
         setReady(true);
       } catch (e) {
         setError(e.message);
