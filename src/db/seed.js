@@ -478,11 +478,12 @@ async function getOrCreateExpenseCat(name) {
     .from("expenses_category")
     .select("id")
     .eq("name", name)
+    .eq("is_demo", true)
     .maybeSingle();
   if (data) return data.id;
   const { data: created } = await supabase
     .from("expenses_category")
-    .insert({ name })
+    .insert({ name, is_demo: true })
     .select("id")
     .single();
   return created.id;
@@ -493,11 +494,12 @@ async function getOrCreateIncomeCat(name) {
     .from("incomes_category")
     .select("id")
     .eq("name", name)
+    .eq("is_demo", true)
     .maybeSingle();
   if (data) return data.id;
   const { data: created } = await supabase
     .from("incomes_category")
-    .insert({ name, is_savings_withdrawal: false })
+    .insert({ name, is_savings_withdrawal: false, is_demo: true })
     .select("id")
     .single();
   return created.id;
@@ -506,7 +508,8 @@ async function getOrCreateIncomeCat(name) {
 export async function seedDemoData() {
   const { data: iCatsData } = await supabase
     .from("incomes_category")
-    .select("id, name");
+    .select("id, name")
+    .eq("is_demo", true);
   const withdrawalCatId = iCatsData?.find(
     (c) => c.name === "Wypłata z oszczędności",
   )?.id;

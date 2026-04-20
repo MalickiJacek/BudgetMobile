@@ -40,6 +40,7 @@ export async function fetchExpenseCategories() {
   const { data } = await supabase
     .from('expenses_category')
     .select('id, name')
+    .eq('is_demo', _demo)
     .order('name');
   return data || [];
 }
@@ -57,7 +58,7 @@ export async function deleteExpense(id) {
 }
 
 export async function addExpenseCategory(name) {
-  const { error } = await supabase.from('expenses_category').insert({ name });
+  const { error } = await supabase.from('expenses_category').insert({ name, is_demo: _demo });
   if (error) throw error;
 }
 
@@ -99,6 +100,7 @@ export async function fetchIncomeCategories() {
   const { data } = await supabase
     .from('incomes_category')
     .select('id, name, is_savings_withdrawal')
+    .eq('is_demo', _demo)
     .eq('is_savings_withdrawal', false)
     .order('name');
   return data || [];
@@ -117,7 +119,7 @@ export async function deleteIncome(id) {
 }
 
 export async function addIncomeCategory(name) {
-  const { error } = await supabase.from('incomes_category').insert({ name, is_savings_withdrawal: false });
+  const { error } = await supabase.from('incomes_category').insert({ name, is_savings_withdrawal: false, is_demo: _demo });
   if (error) throw error;
 }
 
@@ -204,6 +206,7 @@ export async function addWithdrawal({ account_id, amount, date, description, acc
     .from('incomes_category')
     .select('id')
     .eq('is_savings_withdrawal', true)
+    .eq('is_demo', _demo)
     .single();
 
   await supabase.from('incomes').insert({
@@ -278,4 +281,6 @@ export async function clearDemoData() {
   await supabase.from('incomes').delete().eq('is_demo', true);
   await supabase.from('expenses').delete().eq('is_demo', true);
   await supabase.from('savings_accounts').delete().eq('is_demo', true);
+  await supabase.from('expenses_category').delete().eq('is_demo', true);
+  await supabase.from('incomes_category').delete().eq('is_demo', true);
 }
