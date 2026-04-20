@@ -4,8 +4,8 @@ import {
   TouchableOpacity, Modal, TextInput, Alert, Dimensions,
   KeyboardAvoidingView, Platform
 } from 'react-native';
-import DateInput from '../components/DateInput';
 import { useFocusEffect } from '@react-navigation/native';
+import DateInput from '../components/DateInput';
 import { LineChart } from 'react-native-chart-kit';
 import {
   fetchSavingsAccounts, fetchSavingsOperations, fetchAllSnapshots,

@@ -4,13 +4,13 @@ import {
   Modal, TextInput, Alert, ScrollView, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import DateInput from '../components/DateInput';
 import {
   fetchIncomes, fetchIncomeCategories,
   addIncome, updateIncome, deleteIncome,
   addIncomeCategory, deleteIncomeCategory, countIncomesByCategory,
   reassignIncomesCategory,
 } from '../db/database';
-import DateInput from '../components/DateInput';
 
 const todayStr = () => new Date().toISOString().split('T')[0];
 const currentMonthStr = () => new Date().toISOString().slice(0, 7);
