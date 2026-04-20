@@ -36,8 +36,7 @@ export default function ExpensesScreen() {
   const [form, setForm] = useState({ description: '', amount: '', category_id: null, date: todayStr() });
   const [catModal, setCatModal] = useState(false);
   const [newCatName, setNewCatName] = useState('');
-  const [reassignModal, setReassignModal] = useState(false);
-  const [reassignSource, setReassignSource] = useState(null);
+  const [deletingCat, setDeletingCat] = useState(null);
   const [reassignTarget, setReassignTarget] = useState(null);
 
   const load = useCallback(async () => {
@@ -99,11 +98,8 @@ export default function ExpensesScreen() {
   const removeCat = async (cat) => {
     const cnt = await countExpensesByCategory(cat.id);
     if (cnt > 0) {
-      const otherCats = categories.filter(c => c.id !== cat.id);
-      setReassignSource({ ...cat, cnt });
-      setReassignTarget(otherCats[0]?.id || null);
-      setCatModal(false);
-      setTimeout(() => setReassignModal(true), 400);
+      setDeletingCat({ ...cat, cnt });
+      setReassignTarget(categories.find(c => c.id !== cat.id)?.id || null);
       return;
     }
     Alert.alert('Usuń kategorię', `Usunąć "${cat.name}"?`, [
@@ -113,10 +109,10 @@ export default function ExpensesScreen() {
   };
 
   const confirmReassign = async () => {
-    if (!reassignTarget) return;
-    await reassignExpensesCategory(reassignSource.id, reassignTarget);
-    await deleteExpenseCategory(reassignSource.id);
-    setReassignModal(false);
+    if (!reassignTarget || !deletingCat) return;
+    await reassignExpensesCategory(deletingCat.id, reassignTarget);
+    await deleteExpenseCategory(deletingCat.id);
+    setDeletingCat(null);
     load();
   };
 
@@ -209,62 +205,64 @@ export default function ExpensesScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={catModal} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={catModal} animationType="slide" presentationStyle="pageSheet"
+        onDismiss={() => setDeletingCat(null)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={[s.modal, { flex: 1 }]}>
             <Text style={s.modalTitle}>Kategorie wydatków</Text>
-            <ScrollView style={{ flex: 1 }}>
-              {categories.map(cat => (
-                <View key={cat.id} style={s.catRow}>
-                  <Text style={s.catRowName}>{cat.name}</Text>
-                  <TouchableOpacity style={s.catDelBtn} onPress={() => removeCat(cat)}>
-                    <Text style={s.catDelText}>✕</Text>
+            {!deletingCat ? (
+              <>
+                <ScrollView style={{ flex: 1 }}>
+                  {categories.map(cat => (
+                    <View key={cat.id} style={s.catRow}>
+                      <Text style={s.catRowName}>{cat.name}</Text>
+                      <TouchableOpacity style={s.catDelBtn} onPress={() => removeCat(cat)}>
+                        <Text style={s.catDelText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+                <View style={s.catAddRow}>
+                  <TextInput style={[s.input, { flex: 1 }]} value={newCatName}
+                    onChangeText={setNewCatName} placeholder="Nazwa nowej kategorii..."
+                    onSubmitEditing={addCat} />
+                  <TouchableOpacity style={s.catAddBtn} onPress={addCat}>
+                    <Text style={s.catAddBtnText}>Dodaj</Text>
                   </TouchableOpacity>
                 </View>
-              ))}
-            </ScrollView>
-            <View style={s.catAddRow}>
-              <TextInput style={[s.input, { flex: 1 }]} value={newCatName}
-                onChangeText={setNewCatName} placeholder="Nazwa nowej kategorii..."
-                onSubmitEditing={addCat} />
-              <TouchableOpacity style={s.catAddBtn} onPress={addCat}>
-                <Text style={s.catAddBtnText}>Dodaj</Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity style={s.closeBtn}
-              onPress={() => { setCatModal(false); setTimeout(() => setModalVisible(true), 350); }}>
-              <Text style={s.btnCancelText}>Zamknij</Text>
-            </TouchableOpacity>
+                <TouchableOpacity style={s.closeBtn}
+                  onPress={() => { setCatModal(false); setTimeout(() => setModalVisible(true), 350); }}>
+                  <Text style={s.btnCancelText}>Zamknij</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View style={s.infoBox}>
+                  <Text style={s.infoText}>
+                    Kategoria „{deletingCat.name}" ma {deletingCat.cnt} wydatk{deletingCat.cnt === 1 ? '' : deletingCat.cnt < 5 ? 'i' : 'ów'}.{'\n'}
+                    Wybierz kategorię, na którą przepiąć te wydatki:
+                  </Text>
+                </View>
+                <ScrollView style={{ flex: 1 }}>
+                  <View style={[s.pills, { marginTop: 12 }]}>
+                    {categories.filter(c => c.id !== deletingCat.id).map(c => (
+                      <Pill key={c.id} label={c.name} active={reassignTarget === c.id}
+                        color="#e53935" onPress={() => setReassignTarget(c.id)} />
+                    ))}
+                  </View>
+                </ScrollView>
+                <View style={[s.btnRow, { marginTop: 16, marginBottom: 40 }]}>
+                  <TouchableOpacity style={s.btnCancel} onPress={() => setDeletingCat(null)}>
+                    <Text style={s.btnCancelText}>Anuluj</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[s.btnSave, { backgroundColor: '#e53935' }]} onPress={confirmReassign}>
+                    <Text style={s.btnSaveText}>Przenieś i usuń</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
         </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={reassignModal} animationType="slide" presentationStyle="pageSheet">
-        <View style={[s.modal, { flex: 1 }]}>
-          <Text style={s.modalTitle}>Usuń kategorię</Text>
-          <View style={s.infoBox}>
-            <Text style={s.infoText}>
-              Kategoria „{reassignSource?.name}" ma {reassignSource?.cnt} wydatk{reassignSource?.cnt === 1 ? '' : reassignSource?.cnt < 5 ? 'i' : 'ów'}.{'\n'}
-              Wybierz kategorię, na którą mamy przepiąć te wydatki:
-            </Text>
-          </View>
-          <ScrollView style={{ flex: 1 }}>
-            <View style={[s.pills, { marginTop: 12 }]}>
-              {categories.filter(c => c.id !== reassignSource?.id).map(c => (
-                <Pill key={c.id} label={c.name} active={reassignTarget === c.id}
-                  color="#e53935" onPress={() => setReassignTarget(c.id)} />
-              ))}
-            </View>
-          </ScrollView>
-          <View style={[s.btnRow, { marginTop: 16, marginBottom: 40 }]}>
-            <TouchableOpacity style={s.btnCancel} onPress={() => setReassignModal(false)}>
-              <Text style={s.btnCancelText}>Anuluj</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.btnSave, { backgroundColor: '#e53935' }]} onPress={confirmReassign}>
-              <Text style={s.btnSaveText}>Przenieś i usuń</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       </Modal>
     </View>
   );
