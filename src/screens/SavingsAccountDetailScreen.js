@@ -35,15 +35,21 @@ export default function SavingsAccountDetailScreen({ route }) {
       setChartData(null); setStats(null); return;
     }
 
-    // Zbuduj oś czasu
-    const allMonths = new Set([
-      ...rawDeposits.map(d => d.month),
-      ...snapsWithMonth.map(s => s.month),
-    ]);
+    // Zbuduj oś czasu — WSZYSTKIE miesiące od pierwszego do teraz (proporcjonalne odstępy)
     const now = new Date();
     const nowMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    allMonths.add(nowMonth);
-    const sortedMonths = [...allMonths].sort();
+    const allDataMonths = [
+      ...rawDeposits.map(d => d.month),
+      ...snapsWithMonth.map(s => s.month),
+    ].sort();
+    const firstMonth = allDataMonths[0] || nowMonth;
+    const sortedMonths = [];
+    let [cy, cm] = firstMonth.split('-').map(Number);
+    const [ey, em] = nowMonth.split('-').map(Number);
+    while (cy < ey || (cy === ey && cm <= em)) {
+      sortedMonths.push(`${cy}-${String(cm).padStart(2, '0')}`);
+      cm++; if (cm > 12) { cm = 1; cy++; }
+    }
 
     // Skumulowane wpłaty
     const depositMap = {};

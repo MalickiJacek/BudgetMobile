@@ -264,6 +264,14 @@ export async function countDemoExpenses() {
   return count || 0;
 }
 
+export async function reassignExpensesCategory(oldId, newId) {
+  await supabase.from('expenses').update({ category_id: newId }).eq('category_id', oldId).eq('is_demo', _demo);
+}
+
+export async function reassignIncomesCategory(oldId, newId) {
+  await supabase.from('incomes').update({ category_id: newId }).eq('category_id', oldId).eq('is_demo', _demo);
+}
+
 export async function clearDemoData() {
   await supabase.from('savings_snapshots').delete().eq('is_demo', true);
   await supabase.from('savings_operations').delete().eq('is_demo', true);

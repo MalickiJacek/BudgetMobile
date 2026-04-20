@@ -1,8 +1,10 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, FlatList,
-  TouchableOpacity, Modal, TextInput, Alert, Dimensions
+  TouchableOpacity, Modal, TextInput, Alert, Dimensions,
+  KeyboardAvoidingView, Platform
 } from 'react-native';
+import DateInput from '../components/DateInput';
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
 import {
@@ -33,9 +35,20 @@ export default function SavingsScreen({ navigation }) {
     const snaps = await fetchAllSnapshots();
     if (snaps.length === 0) { setTrendData(null); return; }
 
-    const allMonths = [...new Set(snaps.map(s => s.snapshot_date.slice(0, 7)))].sort();
-    const lastByAccount = {};
+    const snapMonths = snaps.map(s => s.snapshot_date.slice(0, 7)).sort();
+    const firstMonth = snapMonths[0];
+    const lastMonth = snapMonths[snapMonths.length - 1];
 
+    // Generuj WSZYSTKIE miesiące od pierwszego do ostatniego snapshotu (proporcjonalne odstępy)
+    const allMonths = [];
+    let [cy, cm] = firstMonth.split('-').map(Number);
+    const [ey, em] = lastMonth.split('-').map(Number);
+    while (cy < ey || (cy === ey && cm <= em)) {
+      allMonths.push(`${cy}-${String(cm).padStart(2, '0')}`);
+      cm++; if (cm > 12) { cm = 1; cy++; }
+    }
+
+    const lastByAccount = {};
     const monthlyTotals = allMonths.map(month => {
       snaps.filter(s => s.snapshot_date.slice(0, 7) === month).forEach(s => {
         lastByAccount[s.account_id] = s.balance;
@@ -166,8 +179,10 @@ export default function SavingsScreen({ navigation }) {
           contentContainerStyle={{ paddingBottom: 120, paddingTop: 8 }}
           renderItem={({ item }) => (
             <TouchableOpacity style={s.opRow} onLongPress={() => removeOp(item)}>
-              <View style={[s.opIcon, { backgroundColor: item.type === 'deposit' ? '#e3f2fd' : '#e8f5e9' }]}>
-                <Text style={s.opIconText}>{item.type === 'deposit' ? '↓' : '↑'}</Text>
+              <View style={[s.opIcon, { backgroundColor: item.type === 'deposit' ? '#e8f5e9' : '#ffebee' }]}>
+                <Text style={[s.opIconText, { color: item.type === 'deposit' ? '#2e7d32' : '#e53935' }]}>
+                  {item.type === 'deposit' ? '↑' : '↓'}
+                </Text>
               </View>
               <View style={s.opBody}>
                 <Text style={s.opAccount}>{item.account_name}</Text>
@@ -175,8 +190,8 @@ export default function SavingsScreen({ navigation }) {
                 {item.type === 'withdrawal' && <Text style={s.opTag}>auto-wpływ zarejestrowany</Text>}
               </View>
               <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[s.opAmount, { color: item.type === 'deposit' ? '#1565c0' : '#43a047' }]}>
-                  {item.type === 'deposit' ? '−' : '+'}{item.amount.toLocaleString('pl-PL')} zł
+                <Text style={[s.opAmount, { color: item.type === 'deposit' ? '#2e7d32' : '#e53935' }]}>
+                  {item.type === 'deposit' ? '+' : '−'}{item.amount.toLocaleString('pl-PL')} zł
                 </Text>
                 <Text style={s.opDate}>{item.date}</Text>
               </View>
@@ -235,84 +250,90 @@ export default function SavingsScreen({ navigation }) {
         <TouchableOpacity style={[s.fabSm, { backgroundColor: '#37474f' }]} onPress={() => setSnapshotModal(true)}>
           <Text style={s.fabSmText}>📸</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.fabSm, { backgroundColor: '#43a047' }]} onPress={() => openOpModal('withdrawal')}>
-          <Text style={[s.fabSmText, { fontSize: 20 }]}>↑</Text>
+        <TouchableOpacity style={[s.fabSm, { backgroundColor: '#e53935' }]} onPress={() => openOpModal('withdrawal')}>
+          <Text style={[s.fabSmText, { fontSize: 20 }]}>↓</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.fab, { backgroundColor: '#1565C0' }]} onPress={() => openOpModal('deposit')}>
-          <Text style={s.fabText}>↓</Text>
+        <TouchableOpacity style={[s.fab, { backgroundColor: '#2e7d32' }]} onPress={() => openOpModal('deposit')}>
+          <Text style={s.fabText}>↑</Text>
         </TouchableOpacity>
       </View>
 
       {/* Modal - operacja */}
       <Modal visible={opModal} animationType="slide" presentationStyle="pageSheet">
-        <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
-          <Text style={s.modalTitle}>{opType === 'deposit' ? '↓ Wpłata na oszczędności' : '↑ Wypłata z oszczędności'}</Text>
-          {opType === 'withdrawal' && (
-            <View style={s.infoBox}><Text style={s.infoText}>Wypłata zostanie automatycznie zarejestrowana jako wpływ w budżecie.</Text></View>
-          )}
-          <Text style={s.label}>Konto</Text>
-          <View style={s.pills}>
-            {accounts.map(a => (
-              <Pill key={a.id} label={a.name} active={opForm.account_id === a.id}
-                color={a.color} onPress={() => setOpForm(f => ({ ...f, account_id: a.id }))} />
-            ))}
-          </View>
-          <Text style={s.label}>Kwota (zł)</Text>
-          <TextInput style={s.input} value={opForm.amount} onChangeText={v => setOpForm(f => ({ ...f, amount: v }))} keyboardType="decimal-pad" placeholder="0" autoFocus />
-          <Text style={s.label}>Data</Text>
-          <TextInput style={s.input} value={opForm.date} onChangeText={v => setOpForm(f => ({ ...f, date: v }))} placeholder="YYYY-MM-DD" />
-          <Text style={s.label}>Opis (opcjonalnie)</Text>
-          <TextInput style={s.input} value={opForm.description} onChangeText={v => setOpForm(f => ({ ...f, description: v }))} placeholder="np. comiesięczna wpłata" />
-          <View style={s.btnRow}>
-            <TouchableOpacity style={s.btnCancel} onPress={() => setOpModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
-            <TouchableOpacity style={[s.btnSave, { backgroundColor: opType === 'deposit' ? '#1565C0' : '#43a047' }]} onPress={saveOp}><Text style={s.btnSaveText}>Zapisz</Text></TouchableOpacity>
-          </View>
-        </ScrollView>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
+            <Text style={s.modalTitle}>{opType === 'deposit' ? '↑ Wpłata na oszczędności' : '↓ Wypłata z oszczędności'}</Text>
+            {opType === 'withdrawal' && (
+              <View style={s.infoBox}><Text style={s.infoText}>Wypłata zostanie automatycznie zarejestrowana jako wpływ w budżecie.</Text></View>
+            )}
+            <Text style={s.label}>Konto</Text>
+            <View style={s.pills}>
+              {accounts.map(a => (
+                <Pill key={a.id} label={a.name} active={opForm.account_id === a.id}
+                  color={a.color} onPress={() => setOpForm(f => ({ ...f, account_id: a.id }))} />
+              ))}
+            </View>
+            <Text style={s.label}>Kwota (zł)</Text>
+            <TextInput style={s.input} value={opForm.amount} onChangeText={v => setOpForm(f => ({ ...f, amount: v }))} keyboardType="decimal-pad" placeholder="0" autoFocus />
+            <Text style={s.label}>Data</Text>
+            <DateInput value={opForm.date} onChange={v => setOpForm(f => ({ ...f, date: v }))} inputStyle={s.input} />
+            <Text style={s.label}>Opis (opcjonalnie)</Text>
+            <TextInput style={s.input} value={opForm.description} onChangeText={v => setOpForm(f => ({ ...f, description: v }))} placeholder="np. comiesięczna wpłata" />
+            <View style={s.btnRow}>
+              <TouchableOpacity style={s.btnCancel} onPress={() => setOpModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.btnSave, { backgroundColor: opType === 'deposit' ? '#2e7d32' : '#e53935' }]} onPress={saveOp}><Text style={s.btnSaveText}>Zapisz</Text></TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal - snapshot */}
       <Modal visible={snapshotModal} animationType="slide" presentationStyle="pageSheet">
-        <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
-          <Text style={s.modalTitle}>📸 Aktualizuj stan konta</Text>
-          <View style={s.infoBox}><Text style={s.infoText}>Wpisz aktualny stan wybranego konta. Zyski i straty zostaną uwzględnione automatycznie.</Text></View>
-          <Text style={s.label}>Konto</Text>
-          <View style={s.pills}>
-            {accounts.map(a => (
-              <Pill key={a.id} label={a.name} active={snapForm.account_id === a.id}
-                color={a.color} onPress={() => setSnapForm(f => ({ ...f, account_id: a.id }))} />
-            ))}
-          </View>
-          <Text style={s.label}>Aktualny stan (zł)</Text>
-          <TextInput style={s.input} value={snapForm.balance} onChangeText={v => setSnapForm(f => ({ ...f, balance: v }))} keyboardType="decimal-pad" placeholder="np. 15420" autoFocus />
-          <Text style={s.label}>Data</Text>
-          <TextInput style={s.input} value={snapForm.snapshot_date} onChangeText={v => setSnapForm(f => ({ ...f, snapshot_date: v }))} placeholder="YYYY-MM-DD" />
-          <Text style={s.label}>Notatka (opcjonalnie)</Text>
-          <TextInput style={s.input} value={snapForm.note} onChangeText={v => setSnapForm(f => ({ ...f, note: v }))} placeholder="np. po wypłacie odsetek" />
-          <View style={s.btnRow}>
-            <TouchableOpacity style={s.btnCancel} onPress={() => setSnapshotModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
-            <TouchableOpacity style={[s.btnSave, { backgroundColor: '#37474f' }]} onPress={saveSnapshot}><Text style={s.btnSaveText}>Zapisz</Text></TouchableOpacity>
-          </View>
-        </ScrollView>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
+            <Text style={s.modalTitle}>📸 Aktualizuj stan konta</Text>
+            <View style={s.infoBox}><Text style={s.infoText}>Wpisz aktualny stan wybranego konta. Zyski i straty zostaną uwzględnione automatycznie.</Text></View>
+            <Text style={s.label}>Konto</Text>
+            <View style={s.pills}>
+              {accounts.map(a => (
+                <Pill key={a.id} label={a.name} active={snapForm.account_id === a.id}
+                  color={a.color} onPress={() => setSnapForm(f => ({ ...f, account_id: a.id }))} />
+              ))}
+            </View>
+            <Text style={s.label}>Aktualny stan (zł)</Text>
+            <TextInput style={s.input} value={snapForm.balance} onChangeText={v => setSnapForm(f => ({ ...f, balance: v }))} keyboardType="decimal-pad" placeholder="np. 15420" autoFocus />
+            <Text style={s.label}>Data</Text>
+            <DateInput value={snapForm.snapshot_date} onChange={v => setSnapForm(f => ({ ...f, snapshot_date: v }))} inputStyle={s.input} />
+            <Text style={s.label}>Notatka (opcjonalnie)</Text>
+            <TextInput style={s.input} value={snapForm.note} onChangeText={v => setSnapForm(f => ({ ...f, note: v }))} placeholder="np. po wypłacie odsetek" />
+            <View style={s.btnRow}>
+              <TouchableOpacity style={s.btnCancel} onPress={() => setSnapshotModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.btnSave, { backgroundColor: '#37474f' }]} onPress={saveSnapshot}><Text style={s.btnSaveText}>Zapisz</Text></TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal - nowe konto */}
       <Modal visible={accountModal} animationType="slide" presentationStyle="pageSheet">
-        <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
-          <Text style={s.modalTitle}>Nowe konto</Text>
-          <Text style={s.label}>Nazwa</Text>
-          <TextInput style={s.input} value={accForm.name} onChangeText={v => setAccForm(f => ({ ...f, name: v }))} placeholder="np. IKE Plus, Lokata PKO..." autoFocus />
-          <Text style={s.label}>Kolor</Text>
-          <View style={s.colorRow}>
-            {COLORS.map(c => (
-              <TouchableOpacity key={c} style={[s.colorDot, { backgroundColor: c }, accForm.color === c && s.colorDotActive]}
-                onPress={() => setAccForm(f => ({ ...f, color: c }))} />
-            ))}
-          </View>
-          <View style={s.btnRow}>
-            <TouchableOpacity style={s.btnCancel} onPress={() => setAccountModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
-            <TouchableOpacity style={[s.btnSave, { backgroundColor: accForm.color }]} onPress={saveAccount}><Text style={s.btnSaveText}>Dodaj konto</Text></TouchableOpacity>
-          </View>
-        </ScrollView>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView style={s.modal} keyboardShouldPersistTaps="handled">
+            <Text style={s.modalTitle}>Nowe konto</Text>
+            <Text style={s.label}>Nazwa</Text>
+            <TextInput style={s.input} value={accForm.name} onChangeText={v => setAccForm(f => ({ ...f, name: v }))} placeholder="np. IKE Plus, Lokata PKO..." autoFocus />
+            <Text style={s.label}>Kolor</Text>
+            <View style={s.colorRow}>
+              {COLORS.map(c => (
+                <TouchableOpacity key={c} style={[s.colorDot, { backgroundColor: c }, accForm.color === c && s.colorDotActive]}
+                  onPress={() => setAccForm(f => ({ ...f, color: c }))} />
+              ))}
+            </View>
+            <View style={s.btnRow}>
+              <TouchableOpacity style={s.btnCancel} onPress={() => setAccountModal(false)}><Text style={s.btnCancelText}>Anuluj</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.btnSave, { backgroundColor: accForm.color }]} onPress={saveAccount}><Text style={s.btnSaveText}>Dodaj konto</Text></TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -346,7 +367,7 @@ const s = StyleSheet.create({
   empty: { color: '#bbb', textAlign: 'center', marginTop: 60, fontSize: 15 },
   opRow: { backgroundColor: '#fff', marginHorizontal: 14, marginVertical: 4, borderRadius: 12, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   opIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  opIconText: { fontSize: 20, fontWeight: '800', color: '#1565c0' },
+  opIconText: { fontSize: 20, fontWeight: '800' },
   opBody: { flex: 1 },
   opAccount: { fontSize: 14, fontWeight: '600', color: '#333' },
   opDesc: { fontSize: 12, color: '#aaa', marginTop: 2 },
